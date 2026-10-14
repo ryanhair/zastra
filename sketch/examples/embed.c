@@ -64,7 +64,7 @@ int main(void) {
             break;
         }
     }
-    if (st != ZASTRA_DONE) fprintf(stderr, "stream ended: %d\n", (int)st);
+    if (st != ZASTRA_DONE) fprintf(stderr, "stream ended (%d): %s\n", (int)st, zastra_stream_error(s));
     zastra_stream_free(s); /* also cancels the run if it is still going */
 
     /* Typed output, as JSON matching SUPPORT_TRIAGE_SCHEMA. */

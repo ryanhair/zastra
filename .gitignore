@@ -2,3 +2,5 @@
 zig-out/
 .DS_Store
 zig-pkg/
+zastra.sqlite*
+zastra-trace.jsonl

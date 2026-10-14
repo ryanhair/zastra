@@ -61,6 +61,13 @@ pub const State = struct {
         return @intCast(@divFloor(Io.Clock.real.now(s.io).nanoseconds, std.time.ns_per_ms));
     }
 
+    /// Like `newId`, into a caller buffer (at least prefix.len + 17 bytes).
+    pub fn newIdInto(s: *const State, buf: []u8, comptime prefix: []const u8) ![]const u8 {
+        var raw: [8]u8 = undefined;
+        s.io.random(&raw);
+        return std.fmt.bufPrint(buf, prefix ++ "_{x:0>16}", .{std.mem.readInt(u64, &raw, .little)});
+    }
+
     /// A random id like "run_3f9a0c1d2e4b5a69".
     pub fn newId(s: *const State, arena: Allocator, comptime prefix: []const u8) Allocator.Error![]const u8 {
         var raw: [8]u8 = undefined;

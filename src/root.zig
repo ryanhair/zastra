@@ -100,6 +100,13 @@ pub const fmt = struct {
     pub const json = @import("schema/json.zig").fmt;
 };
 
+/// The C ABI and App manifest (used by `z.addCLib` and the dev CLI).
+pub const capi = struct {
+    pub const exportAll = @import("capi/capi.zig").exportAll;
+    pub const header = @import("capi/header.zig");
+    pub const manifest = @import("capi/manifest.zig");
+};
+
 /// Internal: comptime reflection and error helpers (stable for zastra's own
 /// build helpers, not part of the public API).
 pub const meta = struct {

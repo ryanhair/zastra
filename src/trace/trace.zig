@@ -17,6 +17,8 @@ pub const Config = union(enum) {
     pub const Jsonl = struct {
         file: Io.File,
         include_content: bool = false,
+        /// Append at the end of the file (for a trace log shared across runs).
+        append: bool = false,
     };
 };
 
@@ -126,7 +128,10 @@ pub const Span = struct {
         };
         t.mutex.lockUncancelable(t.io);
         defer t.mutex.unlock(t.io);
-        cfg.file.writeStreamingAll(t.io, w.buffered()) catch {};
+        if (cfg.append) {
+            const at = cfg.file.length(t.io) catch return;
+            cfg.file.writePositionalAll(t.io, w.buffered(), at) catch {};
+        } else cfg.file.writeStreamingAll(t.io, w.buffered()) catch {};
     }
 
     fn write(s: *Span, w: *Io.Writer, end_ns: i128) Io.Writer.Error!void {

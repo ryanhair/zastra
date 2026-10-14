@@ -82,11 +82,13 @@ pub fn isSuspendable(comptime S: type) bool {
 
 /// A step's id: `pub const name`, else snake_case of the type name.
 pub fn idOf(comptime S: type) []const u8 {
-    comptime {
-        if (isWorkflow(S)) return S.id;
-        if (@hasDecl(S, "name")) return S.name;
-        return reflect.snakeCase(reflect.shortTypeName(S));
-    }
+    return comptime idOfImpl(S);
+}
+
+fn idOfImpl(comptime S: type) []const u8 {
+    if (isWorkflow(S)) return S.id;
+    if (@hasDecl(S, "name")) return S.name;
+    return reflect.snakeCase(reflect.shortTypeName(S));
 }
 
 /// Validate a plain step type (not a workflow or parallel group).
