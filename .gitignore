@@ -4,3 +4,6 @@ zig-out/
 zig-pkg/
 zastra.sqlite*
 zastra-trace.jsonl
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
