@@ -65,7 +65,7 @@ pub fn Step(comptime A: type) type {
 
         fn toolName(comptime T: type) []const u8 {
             inline for (A.tools) |TI| if (TI.Tool == T) return TI.name;
-            @compileError("zastra: h.script(" ++ A.id ++ ", ...): " ++ @typeName(T) ++ " is not one of this agent's tools");
+            @compileError("zastra: h.script(" ++ A.id ++ ", ...): " ++ @import("../meta/reflect.zig").shortTypeName(T) ++ " is not a tool of agent '" ++ A.id ++ "'");
         }
     };
 }
