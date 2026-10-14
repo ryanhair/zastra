@@ -961,17 +961,27 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D28 | Dev CLI and C library context | The app module exports `pub const App`, and `pub fn createContext(gpa, io) !*Ctx` (optional `destroyContext`) when `Ctx` can't be default-initialized. |
 | D29 | Cassettes | Provider tests replay hand-written SSE in each provider's documented wire format (`tests/cassettes`), and the test harness renders scripted turns in the same format. `App.init(.{ .http = .{ .record_dir = "..." } })` records real traffic into new cassettes. |
 | D30 | Thinking blocks in persisted history | Passed back unchanged **within** a run (required for tool loops). Dropped from history **loaded** at the start of a later run: newer Claude models bind thinking blocks to the exact earlier prefix, which the history window and the working-memory suffix change between runs, so replaying them would be rejected. Dropping them is the documented recovery and costs only that turn's earlier reasoning. |
+| D31 | Saved approvals API | An agent with approval-gated tools returns `union { completed, suspended }` from `generate`; resume by id with `resumeRun` / `resumeStream`, like workflows. Replaces `error.ApprovalRequired`. Agents without gated tools are unchanged. (§17.3) |
+| D32 | Agent run storage | One `runs` table with `kind` (migration 0002); atomic `claimRun` compare-and-set before every resume, for agents and workflows (fixes a v1 double-resume race). (§17.3) |
+| D33 | Partial approval decisions | Allowed: decided ids are saved, the run stays suspended with the rest. (§17.3) |
+| D34 | Gated agents in workflow steps | `z.step.agent` with a gated agent becomes suspendable automatically (`z.Approvals(A)` / `z.Decisions(A)`); custom steps use `w.agent(A).run`, which resumes the saved agent run on replay. Parallel branches still can't suspend. Supersedes D18's compile error. (§17.4) |
+| D35 | OpenAI API | Catalog `openai/*` models use the Responses API, with `store: false`; `openai_compat` (Chat Completions) remains for third-party servers. (§17.2) |
+| D36 | OpenAI reasoning items | Round-tripped within a run as opaque blocks; dropped from history loaded across runs, like D30, until live evidence says otherwise. (§17.2) |
+| D37 | Thinking control | `.thinking` = `.default`, `.on`, `.off` or `.{ .budget = N }` and `.show_thinking`, mapped per model at comptime from catalog capabilities; impossible combinations are compile errors. (§17.1) |
+| D38 | MCP client era and auth | Dual-era: 2026-07-28 first, falling back to 2025-11-25 `initialize` on stdio and HTTP; HTTP+SSE (2024-11-05) unsupported. No sampling/elicitation/roots (`InputRequiredResult` becomes a tool error). HTTP auth is static headers and a bearer token from the env; OAuth deferred. (§17.5) |
+| D39 | MCP tool list refresh | Via `subscriptions/listen`, legacy `list_changed` notifications, or `ttlMs`; applied at the next run start, tools sorted for stable prefixes. (§17.5) |
+| D40 | MCP schema validation | Adds local `$ref`, `allOf`, conditionals and `prefixItems` with depth/size bounds; unsupported schemas skip validation with a warning instead of hiding the tool. (§17.5) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **Implemented default:** return the error (with a diagnostic naming the tool). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
-| D18 | Approval-gated agents inside workflow steps | **v1: compile error** when `w.agent(A)` or `z.step.agent(A, ...)` uses an agent that has any approval-gated tool (§6.4). The message names the tool and points at `Suspend`/`Resume` steps. **v1.1:** with persisted agent runs (D9), the step suspends the workflow instead. Rejected: auto-denying gated calls at runtime, which is silent and surprising. |
+| D18 | Approval-gated agents inside workflow steps | **Superseded in v1.1 by D34.** **v1: compile error** when `w.agent(A)` or `z.step.agent(A, ...)` uses an agent that has any approval-gated tool (§6.4). The message names the tool and points at `Suspend`/`Resume` steps. **v1.1:** with persisted agent runs (D9), the step suspends the workflow instead. Rejected: auto-denying gated calls at runtime, which is silent and surprising. |
 | D19 | Unknown model ID under a known provider | **Compile error** with did-you-mean and a hint to use `z.custom` (§5.4). Revisit based on user feedback; the alternative is to accept it with conservative capabilities and no pricing. |
 
 ---
 
 ## 14. Deferred (v1.1 / v2)
 
-**v1.1** (everything deferred to v1.1 elsewhere in this plan, in one place; v1.1 planning orders and trims it)
+**v1.1** (everything deferred to v1.1 elsewhere in this plan, in one place; §17 orders it into releases and plans v1.1a in detail)
 
 Agents and providers
 - persisted agent runs while awaiting approval (D9); then approval-gated agents inside workflow steps suspend the workflow instead of being a compile error (D18)
@@ -1066,3 +1076,274 @@ It also found two bugs, both fixed:
 **Known v1 limitations:** no incremental `output_partial` streaming (§5.15, v1.1); parallel workflow branches don't cancel siblings early (§6.6); `pattern` constraints aren't enforced client-side (D27); MCP tool lists are fixed at `App.init`. The full v1.1 list is in §14.
 
 **After v1 (2026-10-14):** added the body idle timeout (§6.2), tested against a local server that sends one event and goes silent.
+
+---
+
+## 17. v1.1 plan
+
+v1.1 ships in three releases. **v1.1a** (this section, in detail) fixes what production use needs first. **v1.1b** (developer experience) and **v1.1c** (tooling) keep the §14 lists and are planned in detail when v1.1a lands.
+
+| Release | Scope |
+|---|---|
+| v1.1a | Thinking control and catalog capabilities (N1), the OpenAI Responses API (N2), saved agent runs and approvals (N3), approval-gated agents in workflows (N4), an MCP client for the 2026-07-28 spec with Streamable HTTP (N5), release (N6) |
+| v1.1b | `output_partial` streaming, `z.step.loop`, early sibling cancellation, working-memory migrations |
+| v1.1c | OTLP exporter, `dev serve`, `z.testing.arbitrary` and tool fuzzing |
+
+Out of v1.1: `z.DynamicAgent` (v2, only if a use case appears), nested tool-result blocks, client-side `pattern` enforcement, MCP OAuth (D38).
+
+### 17.0 Before starting
+
+- Tag `v1.0.0` on the current `main`.
+- Push to a remote so CI runs at least once on Linux, macOS and Windows. Fix whatever it finds before N1.
+- OpenAI credits are needed to verify N2 live. Without them N2 can be built but can't be released (§17.7).
+
+### 17.1 N1: thinking control and catalog capabilities
+
+**Problem.** Thinking is only reachable through `provider_options` today. Its defaults differ by model:
+- Claude 5.x models think by default, but return no thinking text (`display: "omitted"`).
+- Sonnet 4.6 doesn't think unless asked.
+- Older models need `budget_tokens`.
+- Some models can't turn thinking off: Opus 5.5 can't, and Sonnet 5.5 returns 400 on `disabled`.
+
+**API (D37).** Two agent fields, next to the existing `.effort`:
+
+```zig
+pub const Planner = z.Agent(Ctx, .{
+    .name = "planner",
+    .model = "anthropic/claude-sonnet-5-5",
+    .thinking = .on,            // .default (send nothing) | .on | .off | .{ .budget = 8_000 }
+    .show_thinking = true,      // stream summaries as .reasoning_delta
+    .effort = .high,
+});
+```
+
+Mapping is done at comptime from catalog capabilities:
+
+| zastra | Anthropic | OpenAI Responses |
+|---|---|---|
+| `.default` | omit `thinking` | omit `reasoning.effort` |
+| `.on` | `{type:"adaptive"}`; on budget-only models, a compile error asking for `.{ .budget = N }` | model default (reasoning models think) |
+| `.off` | `{type:"disabled"}` where supported, else a compile error naming the model and suggesting `.effort = .low` | `reasoning.effort = "none"` where supported, else a compile error |
+| `.{ .budget = N }` | `{type:"enabled", budget_tokens: N}` where supported, else a compile error; `N < max_tokens` is checked | compile error (no budgets) |
+| `.show_thinking = true` | `display: "summarized"` | `reasoning.summary = "auto"` |
+
+**Catalog.** `Supports` gains:
+- `thinking: struct { adaptive: bool, budget: bool, disable: bool }`
+- `thinking_display: bool`
+
+`.reasoning_delta` is in an agent's event union only when `.show_thinking = true` or the model returns raw thinking (D26 style).
+
+**`models-update`.** With `ANTHROPIC_API_KEY` set, it reads `GET /v1/models` for:
+- `structured_outputs`
+- the thinking types
+- `max_input_tokens` and `max_tokens`
+
+It writes them over `sources.json`, prints a diff, and fails if a field disagrees with a hand-pinned value marked `"pin": true`. Pricing stays hand-maintained, since no API publishes it.
+
+**Exit criteria:**
+- Golden prefixes for each thinking mode on 4.6, 5.5 and an OpenAI reasoning model.
+- Compile-fail cases for every compile error in the table.
+- A live run with `.show_thinking` on Sonnet 5.5 that produces `.reasoning_delta`.
+
+### 17.2 N2: OpenAI Responses API (D35, D36)
+
+**Problem.** Chat Completions doesn't return reasoning items, so OpenAI reasoning models lose their reasoning between tool steps. Responses is OpenAI's recommended API. Chat Completions stays supported.
+
+**Design:**
+- **Dialect.** New file `provider/openai_responses.zig`, a third `api` alongside `anthropic` and `openai_compat`, behind the same `Impl` interface.
+- **Which models use it.** Catalog `openai/*` models switch to it. `openai_compat` stays for `z.custom` third-party servers (Groq, OpenRouter, Ollama, vLLM). `z.custom(.{ .provider = .openai_responses, ... })` is allowed.
+- **Prefix.** Comptime, in the same style:
+  - `instructions` comes from the system prompt.
+  - Tools are flat, `{type:"function", name, description, parameters, strict}`. Strict is on for zastra tools (openai dialect schemas) and off for MCP tools, whose schemas can't be made strict.
+  - Structured output goes in `text.format = {type:"json_schema", name, schema, strict:true}`.
+  - `store: false`, `stream: true`, and `parallel_tool_calls` from capabilities.
+- **`prompt_cache_key`** is the agent id plus the prefix hash, so requests that share a prefix hit the same cache shard.
+- **Messages map to input items:**
+  - user and assistant text become `message` items
+  - a tool use becomes a `function_call` with its `call_id`
+  - a tool result becomes `function_call_output`
+  - reasoning items (with `encrypted_content`) are `provider_opaque` blocks, passed back unchanged within a run
+- **Across runs (D36),** reasoning items are dropped from loaded history, like D30. That is safe on every provider, and it costs only earlier turns' reasoning. Revisit once there's live evidence that keeping them works and helps.
+- **Events.** `response.output_text.delta` becomes `.text`. Reasoning-summary text deltas become `.reasoning`. Function-call argument deltas accumulate per `item_id`. `response.completed` gives usage (cached input tokens, reasoning tokens counted as output) and the finish reason. `response.incomplete` maps to `max_tokens` or a content filter. `response.failed` and `error` events map to `ProviderError` with a diagnostic. The exact event and field names are pinned against recorded cassettes, not memory.
+- **Size.** An OpenAI-only app now compiles the Responses dialect instead of Chat Completions. An app that uses both catalog OpenAI models and a `z.custom` compat server compiles both. Budgets are re-measured.
+
+**Exit criteria:**
+- Hand-written cassettes for text, tool loops, reasoning round-trip, structured output, refusal, incomplete and error, then replaced by recorded ones.
+- Golden prefixes and the support example's tests passing.
+- A live run on a catalog OpenAI reasoning model with a two-step tool loop, showing reasoning items sent back.
+
+### 17.3 N3: saved agent runs and approvals (D9, D31–D33)
+
+**API (D31).** An agent with approval-gated tools gets a two-armed result, mirroring workflows. Agents without gated tools keep the plain struct; that is D22, nothing changes for them.
+
+```zig
+const r = try rt.agent(Support).generate(arena, "Refund ORD-1042", .{ .thread = "t1" });
+switch (r) {
+    .completed => |c| print("{s}", .{c.text}),
+    .suspended => |s| for (s.requests) |req| switch (req.call) {     // typed per tool, as today
+        .issue_refund => |in| try queueForReview(s.run_id, req.id, in),
+    },
+}
+
+// Later, in any process with the same storage:
+const r2 = try rt.agent(Support).resumeRun(arena, run_id, &.{
+    .{ .id = req_id, .decision = .approve },               // or .{ .deny = "over limit" }
+});
+// Streaming variant, e.g. a UI that reconnects:
+var s = try rt.agent(Support).resumeStream(arena, run_id, decisions);
+```
+
+**Semantics:**
+- `generate` no longer returns `error.ApprovalRequired`. It returns `.suspended` after saving a snapshot. `.on_approval` still decides inline and never suspends.
+- In a live stream, `s.respond(id, decision)` is unchanged. `s.suspend()` saves the snapshot and returns the `Suspended` value, so a UI can stop waiting.
+- **Partial decisions (D33).** `resumeRun` with only some ids decided saves them and returns `.suspended` with the rest. An unknown id is `error.UnknownApproval`, with the pending ids in the diagnostic.
+- **What a snapshot holds:**
+  - the run's messages so far (including the assistant turn with the tool uses and its thinking blocks, which stay valid because the run continues)
+  - each call's id, name, input JSON and decision
+  - step, usage and `repair_used`
+  - working memory and its dirty flag
+  - `thread`, `resource`, `max_steps` and the trace id
+
+  History is still appended once, when the run finishes.
+- **Fingerprint.** It is the hash of the agent's prefix and its tool schemas. A mismatch on resume is `error.SnapshotIncompatible`, and the diagnostic names what changed. There are no migrations for agent runs; the remedy is to deny and restart.
+- **Abandoning a run.** `rt.agent(A).cancelRun(run_id)` marks it `canceled`. Suspended runs never expire on their own; `dev runs --status suspended` lists them.
+
+**Storage (D32).** Migration `0002`:
+- renames `workflow_runs` to `runs`
+- adds `kind` (`agent` | `workflow`)
+- renames `workflow_id` to `owner_id`
+
+The memory backend matches. The vtable gains `claimRun(run_id, from_status, to_status) !bool`, an atomic compare-and-set. It is a single `UPDATE ... WHERE status = ?` in SQLite. Every resume, for agents and workflows alike, claims the run first; losing the claim is `error.RunBusy`. This closes a v1 race where two resumes of one workflow run could both execute.
+
+**C ABI (version 2):**
+- `<lib>_agent_generate` can return `{"status":"suspended","run_id":...,"requests":[{"id","tool","input"}]}`.
+- New `<lib>_agent_resume(app, agent_id, run_id, decisions_json, err)` and `<lib>_agent_resume_stream(...)`.
+- `ZASTRA_ERR_APPROVAL_REQUIRED` is removed.
+- `ZASTRA_ABI_VERSION` becomes 2; the manifest fingerprint already catches header/library mismatch.
+
+**Dev CLI.** `chat` saves and exits on `s` at an approval prompt. `resume <run_id> <decisions>` handles agent runs. `runs` shows both kinds.
+
+**Exit criteria:**
+- Harness tests: suspend → restart (SQLite) → resume; partial decisions; deny; a double resume returning `RunBusy`; a fingerprint mismatch.
+- A compile-fail for switching on `.suspended` for an agent without gated tools.
+- `embed.c` covers suspend and resume.
+- A live suspend/resume across two processes.
+
+### 17.4 N4: approval-gated agents in workflows (D34; supersedes the D18 compile error)
+
+**`z.step.agent(A, ...)`** with a gated agent becomes a suspendable step automatically:
+- `Suspend = z.Approvals(A)` (the run id is internal; this holds the typed requests)
+- `Resume = z.Decisions(A)`
+
+The workflow's `Suspended` union gets the arm, and the C header and manifest describe it.
+
+```zig
+.then(z.step.agent(Support, .{ .input = Ticket, .prompt = "..." }))
+// ...
+.suspended => |s| switch (s.at) {
+    .support => |approvals| for (approvals.requests) |req| ...,
+},
+_ = try rt.workflow(HandleTicket).resumeStep(z.step.agentOf(Support), arena, run_id, decisions);
+```
+
+**Custom steps.** A step declares `pub const Suspend = z.Approvals(A); pub const Resume = z.Decisions(A);` and calls `w.agent(A).run(input, opts)`. That returns `union { done: Result, suspended: z.Approvals(A) }`, and the step returns `.{ .suspended = a }`. On resume, the replayed step (D24) calls `w.agent(A).run` again. zastra sees the agent run already saved under the deterministic id `<wf_run_id>/<step_path>#<n>` and resumes it with `w.resumed`, so the step code has no resume branch.
+
+`w.agent(A).generate` on a gated agent stays a compile error, now pointing at `.run` and the two declarations.
+
+**Still a compile error:** a gated agent inside `z.step.parallel`, because parallel branches can't suspend (§6.6).
+
+**Fingerprint.** The step's agent fingerprint (N3) is folded into the workflow fingerprint, so changing a gated agent's tools invalidates old snapshots instead of failing later.
+
+**Exit criteria:**
+- The sketch's refund flow rewritten with a gated agent step and no hand-written Approve step: suspend, restart, resume.
+- A custom step with two gated agent calls.
+- Compile-fail cases for the remaining D18 cases.
+- Golden Mermaid shows the suspend point.
+
+### 17.5 N5: MCP client for the 2026-07-28 spec (D38–D40)
+
+**Problem.** The MCP 2026-07-28 revision makes the protocol stateless:
+- There is no `initialize` handshake. Every request carries `_meta` with `io.modelcontextprotocol/protocolVersion`, `clientCapabilities` and `clientInfo`.
+- `server/discover` is new.
+- Results carry `resultType`.
+- Server-to-client requests become `InputRequiredResult` (MRTR).
+- List changes arrive on a `subscriptions/listen` stream.
+- Lists carry `ttlMs`.
+
+Streamable HTTP drops sessions, the GET stream and resumability. It adds the `Mcp-Method` and `Mcp-Name` headers and `x-mcp-header` parameter mirroring. Today's client speaks only the legacy `initialize` era over stdio.
+
+**Declarations (D38):**
+
+```zig
+.mcp = .{
+    .docs = z.mcp.stdio(&.{"docs-mcp-server"}),
+    .linear = z.mcp.http("https://mcp.linear.app/mcp", .{
+        .bearer_env = "LINEAR_MCP_TOKEN",            // Authorization: Bearer <env value>, checked at App.init
+        .headers = &.{.{ "X-Team", "acme" }},
+    }),
+},
+```
+
+The transport is chosen at comptime, so an App with only stdio servers compiles no MCP HTTP code (§5.6).
+
+**Dual-era client** (per the spec's compatibility rules):
+- **stdio.** Probe with `server/discover`. On a non-modern error or a 5 s timeout, fall back to `initialize` (2025-11-25).
+- **HTTP.** Send a modern request first. On a 4xx without a recognized modern error body, fall back to `initialize` and the 2025-11-25 Streamable HTTP rules: `Mcp-Session-Id` and DELETE on shutdown. The deprecated 2024-11-05 HTTP+SSE transport isn't supported; the diagnostic says so.
+- The era is cached per server for the App's lifetime.
+- **Requests.**
+  - Modern requests mirror `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` (Base64 sentinel encoding where needed).
+  - `x-mcp-header` parameters go out as `Mcp-Param-*`. Tools whose annotations are invalid are excluded with a warning, as the spec requires.
+  - Both `application/json` and per-request SSE responses are read, the latter with the §6.2 idle timeout.
+- **No client features.** zastra advertises no sampling, elicitation or roots. An `InputRequiredResult` becomes a tool error for the model ("the server needs input zastra can't provide: ...") and is logged.
+- **Auth.** Static headers and a bearer token from the environment only. A 401 with `WWW-Authenticate` gets a diagnostic naming the server and the env var. The OAuth 2.1 flow (protected-resource discovery, PKCE, client ID metadata documents) needs a browser and token storage, so it's deferred. A later `.token = fn (ctx) ![]const u8` hook lets apps supply tokens from their own OAuth.
+
+**Tool list refresh (D39):**
+- **Sources.** Modern servers that advertise `listChanged` get a `subscriptions/listen` stream (`toolsListChanged`), run as a background `io.concurrent` task. Legacy stdio and session HTTP use `notifications/tools/list_changed`. Lists are also re-fetched after `ttlMs`, read lazily at run start.
+- **When it applies.** A refresh rebuilds the affected agents' runtime prefixes (MCP tools are inserted at `tools_insert_at`). It applies at the **next run start**; a running agent keeps its tool list for its whole run. Old prefixes are freed at `App.deinit`; that is bounded, one per change.
+- **Caching.** Tools are sorted by name so unchanged lists produce byte-identical prefixes and keep the prompt cache.
+
+**Schemas (D40).** The 2026-07-28 revision allows any JSON Schema 2020-12 keywords. The validator adds:
+- local `$ref` / `$defs`
+- `allOf`
+- `if`/`then`/`else`
+- `prefixItems`
+
+It has bounds: depth 64 and 10k nodes visited per validation. Unknown keywords stay ignored (permissive). A schema the validator can't handle doesn't block the tool; only argument validation is skipped, with a warning at init.
+
+**Tests.** `tests/fake_mcp_server.zig` gains three modes: `--modern` (stdio, `server/discover`), `--http` (an in-process `std.Io.net` server) and `--legacy-http` (sessions). Tests cover:
+- era detection both ways
+- header mirroring, including Base64 and `x-mcp-header` rejection
+- SSE responses and `InputRequiredResult`
+- list refresh via the listen stream and via `ttlMs`
+- a 401 diagnostic
+
+**Exit criteria:**
+- All of the above pass.
+- The support example adds an HTTP server.
+- A live check against one public modern MCP server and one legacy server.
+
+### 17.6 N6: release v1.1.0
+
+- Update `sketch/` and the docs for every API change above, in the same commits as the code (CLAUDE.md).
+- Re-measure size budgets. Target: anthropic-only + memory stays under 700 KB; the full example stays under 2 MB.
+- `compile_time_baseline_seconds` stays within 25% of v1's 24 s.
+- CI green on all four targets.
+- Live runs on both providers.
+- Write a CHANGELOG with the breaking changes: the gated-agent result union, C ABI v2, the storage migration, and catalog OpenAI models moving to Responses.
+- Tag `v1.1.0`.
+
+### 17.7 Order, dependencies and risks
+
+Order: N1, then N2, then N3, then N4, then N5.
+- N2 needs N1's catalog capabilities for reasoning settings.
+- N4 needs N3.
+- N5 is independent and could run in parallel, but goes last because it's the largest and the spec is newest.
+
+| Risk | Mitigation |
+|---|---|
+| No OpenAI credits: N2 can't be verified live | Build against hand-written cassettes from the API reference; block the release, not the work, on a live run |
+| Responses event details differ from the docs | Pin with recorded cassettes (`.http.record_dir`) as soon as credits exist; the parser ignores unknown events |
+| Third-party servers are slow to adopt the 2026-07-28 MCP spec | The dual-era fallback is part of N5's scope, not an extra |
+| Breaking changes in a minor release | Pre-1.0-adoption project; each break is a compile error with a `zastra:` message pointing at the fix, never a silent change |
+| `claimRun` semantics on the memory backend | A mutex-guarded compare-and-set; the same tests run against both backends |
+| Prefix rebuild on MCP refresh breaks prompt caching | Sorted tools; refresh only between runs; a trace attribute when a prefix changes |
