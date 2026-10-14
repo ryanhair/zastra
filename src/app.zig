@@ -206,7 +206,7 @@ pub fn App(comptime cfg: anytype) type {
 
                 if (mcp_servers.len > 0) {
                     const Mcp = @import("mcp/manager.zig").Manager;
-                    const m = try Mcp.start(gpa, io, st, mcp_servers, mcp_server_transports, if (opts.testing != null) true else false) catch |err| {
+                    const m = Mcp.start(gpa, io, st, mcp_servers, mcp_server_transports) catch |err| {
                         lastInitDiag().* = st.diag;
                         st.http.deinit();
                         backend.close();

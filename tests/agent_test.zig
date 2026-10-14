@@ -286,3 +286,68 @@ test "prefix is byte-identical across calls" {
     try t.expect(std.mem.startsWith(u8, h.requests()[0], Support.prefix.json));
     try t.expect(std.mem.startsWith(u8, h.requests()[1], Support.prefix.json));
 }
+
+test "working memory: the update tool merges and persists per resource" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{
+        .call("update_working_memory", "{\"name\":\"Ada\"}"),
+        .text("Nice to meet you, Ada."),
+    });
+    _ = try h.agent(Support).generate("I'm Ada", .{ .resource = "c1" });
+    // The working-memory tool is offered with a Partial(Notes) schema.
+    try t.expect(std.mem.indexOf(u8, h.requests()[0], "\"name\":\"update_working_memory\"") != null);
+
+    h.script(Support, &.{
+        .call("update_working_memory", "{\"open_issues\":[\"late parcel\"]}"),
+        .text("Noted."),
+    });
+    _ = try h.agent(Support).generate("My parcel is late", .{ .resource = "c1" });
+    // The current value is injected into the system suffix of the next request.
+    try t.expect(std.mem.indexOf(u8, h.requests()[2], "{\\\"name\\\":\\\"Ada\\\",\\\"open_issues\\\":[]}") != null);
+
+    h.script(Support, &.{.text("Hi again")});
+    _ = try h.agent(Support).generate("Hi", .{ .resource = "c1" });
+    try t.expect(std.mem.indexOf(u8, h.requests()[4], "{\\\"name\\\":\\\"Ada\\\",\\\"open_issues\\\":[\\\"late parcel\\\"]}") != null);
+    // Another customer starts empty.
+    h.script(Support, &.{.text("Hello")});
+    _ = try h.agent(Support).generate("Hi", .{ .resource = "c2" });
+    try t.expect(std.mem.indexOf(u8, h.requests()[5], "{\\\"open_issues\\\":[]}") != null);
+}
+
+const SqlApp = z.App(.{ .ctx = Ctx, .agents = .{Support}, .storage = .sqlite });
+
+test "sqlite: a conversation survives a process restart" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp.dir.realPath(t.io, &path_buf);
+    const path = try std.fmt.allocPrint(t.allocator, "{s}/z.sqlite", .{path_buf[0..dir_len]});
+    defer t.allocator.free(path);
+
+    var replay: z.provider.http.Replay = .init(t.allocator, &.{
+        .{ .url_suffix = "/v1/messages", .body = @embedFile("cassettes/anthropic_text.sse") },
+        .{ .url_suffix = "/v1/messages", .body = @embedFile("cassettes/anthropic_text.sse") },
+    });
+    defer replay.deinit();
+    {
+        var rt = try SqlApp.init(t.allocator, t.io, .{ .ctx = &ctx, .storage_path = path, .testing = .{ .replay = &replay } });
+        defer rt.deinit();
+        var arena: std.heap.ArenaAllocator = .init(t.allocator);
+        defer arena.deinit();
+        _ = try rt.agent(Support).generate(arena.allocator(), "Remember the word: pineapple", .{ .thread = "persist" });
+    }
+    {
+        var rt = try SqlApp.init(t.allocator, t.io, .{ .ctx = &ctx, .storage_path = path, .testing = .{ .replay = &replay } });
+        defer rt.deinit();
+        var arena: std.heap.ArenaAllocator = .init(t.allocator);
+        defer arena.deinit();
+        _ = try rt.agent(Support).generate(arena.allocator(), "What was the word?", .{ .thread = "persist" });
+    }
+    try t.expect(std.mem.indexOf(u8, replay.requests.items[1], "pineapple") != null);
+    try t.expect(std.mem.indexOf(u8, replay.requests.items[1], "Hi there, friend.") != null);
+}

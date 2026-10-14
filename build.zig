@@ -10,6 +10,36 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // SQLite, compiled from the vendored amalgamation as a static library.
+    // Its objects are only linked into binaries that reference sqlite3_*
+    // symbols, which only happens for Apps with `.storage = .sqlite` (§5.6).
+    const sqlite_dep = b.dependency("sqlite", .{});
+    const sqlite = b.addLibrary(.{
+        .name = "zastra_sqlite",
+        .linkage = .static,
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    sqlite.root_module.addCSourceFile(.{
+        .file = sqlite_dep.path("sqlite3.c"),
+        .flags = &.{
+            "-DSQLITE_DQS=0",
+            "-DSQLITE_THREADSAFE=1",
+            "-DSQLITE_DEFAULT_MEMSTATUS=0",
+            "-DSQLITE_OMIT_LOAD_EXTENSION",
+            "-DSQLITE_OMIT_DEPRECATED",
+            "-DSQLITE_OMIT_SHARED_CACHE",
+            "-DSQLITE_OMIT_PROGRESS_CALLBACK",
+            "-DSQLITE_OMIT_TRACE",
+            "-DSQLITE_OMIT_UTF16",
+            "-DSQLITE_OMIT_COMPLETE",
+            "-DSQLITE_OMIT_TCL_VARIABLE",
+            "-DSQLITE_LIKE_DOESNT_MATCH_BLOBS",
+            "-DSQLITE_MAX_EXPR_DEPTH=0",
+            "-DSQLITE_USE_ALLOCA",
+        },
+    });
+    mod.linkLibrary(sqlite);
+
     const test_step = b.step("test", "Run unit, golden and compile-fail tests");
 
     // Unit tests.
@@ -18,11 +48,24 @@ pub fn build(b: *std.Build) void {
 
     // Integration tests (tests/*.zig): providers against cassettes, agents
     // and workflows against the scripted model.
+    const fake_mcp = b.addExecutable(.{
+        .name = "fake-mcp-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fake_mcp_server.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const test_options = b.addOptions();
+    test_options.addOptionPath("fake_mcp_server", fake_mcp.getEmittedBin());
     const integration = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/integration.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "zastra", .module = mod }},
+        .imports = &.{
+            .{ .name = "zastra", .module = mod },
+            .{ .name = "test_options", .module = test_options.createModule() },
+        },
     }) });
     test_step.dependOn(&b.addRunArtifact(integration).step);
 

@@ -22,6 +22,7 @@ pub fn Step(comptime A: type) type {
         calls: Calls,
         output_value: A.Output,
         raw_text: []const u8,
+        raw_call: struct { name: []const u8, args_json: []const u8 },
 
         /// The model answers with text.
         pub fn text(t: []const u8) Self {
@@ -51,6 +52,12 @@ pub fn Step(comptime A: type) type {
             return .{ .output_value = v };
         }
 
+        /// The model calls a tool by name with raw JSON arguments, including
+        /// zastra's internal tools (`update_working_memory`, `final_answer`).
+        pub fn call(name: []const u8, args_json: []const u8) Self {
+            return .{ .raw_call = .{ .name = name, .args_json = args_json } };
+        }
+
         /// The model answers with raw text (e.g. malformed JSON, to test repair).
         pub fn raw(t: []const u8) Self {
             return .{ .raw_text = t };
@@ -76,6 +83,10 @@ pub fn render(comptime A: type, gpa: Allocator, step: Step(A), n: usize) ![]u8 {
     var b: Blocks = .{};
     switch (step) {
         .reply, .raw_text => |t| b.text = t,
+        .raw_call => |c| {
+            tool_buf[0] = .{ .name = c.name, .args = c.args_json };
+            b.tools = tool_buf[0..1];
+        },
         .output_value => |v| {
             const j = try json.stringifyAlloc(scratch, v);
             if (A.native_structured_output) b.text = j else {
@@ -87,7 +98,11 @@ pub fn render(comptime A: type, gpa: Allocator, step: Step(A), n: usize) ![]u8 {
             for (c.buf[0..c.len], 0..) |call, i| {
                 switch (call) {
                     inline else => |input, tag| {
-                        tool_buf[i] = .{ .name = @tagName(tag), .args = try json.stringifyAlloc(scratch, input) };
+                        if (comptime std.mem.eql(u8, @tagName(tag), "mcp")) {
+                            tool_buf[i] = .{ .name = try std.fmt.allocPrint(scratch, "{s}__{s}", .{ input.server, input.tool }), .args = input.args_json };
+                        } else {
+                            tool_buf[i] = .{ .name = @tagName(tag), .args = try json.stringifyAlloc(scratch, input) };
+                        }
                     },
                 }
             }

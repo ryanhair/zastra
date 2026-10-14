@@ -116,4 +116,5 @@ test {
     _ = @import("schema/partial.zig");
     _ = @import("schema/comptime_json.zig");
     _ = @import("storage/memory_store.zig");
+    _ = @import("storage/sqlite.zig");
 }
