@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: unit, integration, golden and compile-fail tests
+        run: zig build test --summary all
+      - name: example harness tests
+        working-directory: examples/support
+        run: zig build test --summary all
+      - name: C ABI example (builds, links, runs; fake keys exercise the error paths)
+        working-directory: examples/support
+        env:
+          ANTHROPIC_API_KEY: fake
+          OPENAI_API_KEY: fake
+        run: zig build embed
+
+  cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-linux-musl, aarch64-linux-musl, aarch64-macos, x86_64-windows]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: build the example
+        working-directory: examples/support
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSmall
+
+  size-and-compile-time:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: size budgets (PLAN.md §5.6)
+        run: zig build size
+      - name: compile time of the example (fails on a 2x regression, PLAN.md §12)
+        working-directory: examples/support
+        run: |
+          start=$(date +%s)
+          zig build -Doptimize=ReleaseSmall --cache-dir /tmp/fresh-cache
+          elapsed=$(( $(date +%s) - start ))
+          baseline=$(cat ../../tests/compile_time_baseline_seconds)
+          echo "compile time: ${elapsed}s (baseline ${baseline}s)"
+          test "$elapsed" -le $(( baseline * 2 ))

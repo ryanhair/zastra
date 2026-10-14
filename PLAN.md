@@ -2,9 +2,10 @@
 
 A Mastra-style agent framework for Zig. It covers agents, tools, workflows, memory, MCP and tracing, designed around Zig's strengths: comptime, small portable static binaries, and a C ABI.
 
-> Status: design. Nothing is implemented. The API sketch in `sketch/` is the
-> source of truth for the consumer-facing API. This document is the source of
-> truth for scope, architecture, milestones and open decisions. When the two
+> Status: **v1 implemented** (M0–M7). See §16 for what was verified, and how.
+> The API sketch in `sketch/` is the source of truth for the consumer-facing
+> API; `examples/support` is the sketch made real. This document is the source
+> of truth for scope, architecture, milestones and decisions. When they
 > disagree, fix one of them and note the decision in §13.
 
 ---
@@ -481,7 +482,7 @@ On resume:
 
 ### 5.15 `z.Partial(T)` and schema-specialized streaming parse
 
-**Milestone: M6 (stretch for v1; else v1.1)**
+**Milestone: M6 (stretch for v1; else v1.1).** v1 ships `z.Partial(T)` and its merge (used by working memory). The incremental `stream_parse` and `.output_partial` events are **v1.1**.
 
 **Behavior.**
 - `z.Partial(T)` is `T` with every field optional, applied recursively.
@@ -953,9 +954,14 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D22 | Workflow `Result` shape | `W.Result` has a `.suspended` arm only when some step in the graph can suspend, the same "only what this workflow can do" rule as agent `Event` unions. Switches stay exhaustive and minimal. |
 | D23 | Workflow snapshot migrations | Declared on the builder: `.migration(OldWorkflow.fingerprint_value, migrateFn)` before `.commit()`, since a committed workflow is a generated type and can't carry user declarations. |
 | D24 | Resume semantics | Resuming (and crash recovery) **replays the graph from the top**, skipping steps whose outputs are in the snapshot and re-taking recorded branch decisions. No continuations are stored. Branch predicates therefore must be pure functions of their input. |
-| O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | Default: return the error. Open. |
-| O2 | Tool name default: snake_case of type name vs. explicit `name` required | Default: derived, with override. Open. |
-| O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | Default: yes, needed for MCP pass-through. |
+| D25 | Tool results in the message model | `tool_result.content` is the result as a string (the tool's Output as JSON, or the error message), not nested blocks. Both providers take a string; nested blocks can come back in v1.1 if image results are needed. |
+| D26 | Agent and workflow results with nothing to report | Agents without tools have no `tool_call`/`tool_result` events, and agents without gated tools have no `approval_request` (same rule as D22). |
+| D27 | `pattern` constraints | Emitted into canonical and Anthropic tool schemas; **not** enforced client-side in v1 (no regex engine). Strict dialects drop them. |
+| D28 | Dev CLI and C library context | The app module exports `pub const App`, and `pub fn createContext(gpa, io) !*Ctx` (optional `destroyContext`) when `Ctx` can't be default-initialized. |
+| D29 | Cassettes | Provider tests replay hand-written SSE in each provider's documented wire format (`tests/cassettes`), and the test harness renders scripted turns in the same format. `App.init(.{ .http = .{ .record_dir = "..." } })` records real traffic into new cassettes. |
+| O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **Implemented default:** return the error (with a diagnostic naming the tool). |
+| O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
+| O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
 | D18 | Approval-gated agents inside workflow steps | **v1: compile error** when `w.agent(A)` or `z.step.agent(A, ...)` uses an agent that has any approval-gated tool (§6.4). The message names the tool and points at `Suspend`/`Resume` steps. **v1.1:** with persisted agent runs (D9), the step suspends the workflow instead. Rejected: auto-denying gated calls at runtime, which is silent and surprising. |
 | D19 | Unknown model ID under a known provider | **Compile error** with did-you-mean and a hint to use `z.custom` (§5.4). Revisit based on user feedback; the alternative is to accept it with conservative capabilities and no pricing. |
 
@@ -997,3 +1003,28 @@ Decisions made so far, with the recommended default for each open item. Revise t
 - MCP specification: https://modelcontextprotocol.io
 - Anthropic Messages API (streaming, tool use, prompt caching): https://docs.claude.com
 - OpenAI Chat Completions / structured outputs: https://platform.openai.com/docs
+
+---
+
+## 16. v1 status and verification (2026-10-14)
+
+All milestones M0–M7 are implemented. What was verified, and how:
+
+| Area | Verification |
+|---|---|
+| Schemas, constraints, validated parse (§5.1–5.3) | Unit tests; golden schemas for every sketch type in 4 dialects; fuzzed parser |
+| Catalog (§5.4) | Generated from `tools/models-update/sources.json` (Anthropic: claude-api reference, cached 2026-10-06; OpenAI: pricing page and `GET /v1/models`, 2026-10-14) |
+| Request prefix (§5.5) | Golden prefixes for the example's agents; tests that every request starts with the comptime prefix byte-for-byte |
+| Size follows usage (§5.6) | `zig build size`: anthropic-only/memory **648 KB**, both providers + SQLite **1.51 MB**, everything **1.56 MB** (aarch64-linux-musl, ReleaseSmall, static); the anthropic-only binary contains no `provider.openai_compat` code. The full support example is **1.5 MB**, under the 2 MB stretch target. |
+| Workflows (§5.7, §5.8) | Integration tests: the sketch's refund flow (suspend → persist → resume), the `otherwise` path with parallel + nested `needs` + an agent in a step, retries, failures as values, fingerprint mismatch, migration, resume after a process restart with SQLite; golden Mermaid |
+| Compile-time checks (§7) | 117 compile-fail cases, each asserting its `zastra:` message |
+| Providers (§6.2) | Replay tests for streaming text, thinking + signatures, tool use, redacted/opaque blocks, parallel tool calls, cached-token usage and error bodies on both providers. Live: TLS + request + error handling against api.anthropic.com and api.openai.com (401/429 paths, real diagnostics). |
+| Agent loop (§6.4) | Harness tests: tool loop, ModelErrors, typed streaming events, approvals (approve/deny/pending/ApprovalRequired), parallel tools, native structured output + repair, final_answer fallback, history, working memory, D8 default |
+| MCP (§6.7) | Against a real stdio server subprocess: discovery with pagination, allow-lists, schema validation, structured content |
+| Dev CLI (§8) | All commands run against `examples/support`, including a live workflow run, `runs` and `trace` |
+| C ABI (§9) | `zig build embed`: `embed.c` builds, links `libsupport`, and runs (with fake keys, exercising the error paths) |
+| Cross-compile matrix (§10) | x86_64-linux-musl, aarch64-linux-musl, aarch64-macos, x86_64-windows all build |
+
+**Not verified:** a successful live completion. No Anthropic key was available, and the OpenAI key in the development environment had no credits (`insufficient_quota`). The live paths up to the provider's response were exercised; full live runs are the first thing to do with working keys (`zig build dev -- chat support`).
+
+**Known v1 limitations:** no incremental `output_partial` streaming (§5.15, v1.1); parallel workflow branches don't cancel siblings early (§6.6); `pattern` constraints aren't enforced client-side (D27); MCP tool lists are fixed at `App.init`; idle timeouts during a streaming response aren't implemented (only time-to-headers).

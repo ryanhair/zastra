@@ -26,7 +26,29 @@ fn schemaCases(comptime T: type, comptime name: []const u8) [4]Case {
     return .{ schemaCase(T, name, .canonical), schemaCase(T, name, .anthropic), schemaCase(T, name, .anthropic_output), schemaCase(T, name, .openai) };
 }
 
-pub const all = schemaCases(fx.Order, "order") ++
+const support = @import("support_app");
+
+fn text(comptime file: []const u8, comptime body: []const u8) Case {
+    return .{
+        .file = file,
+        .render = struct {
+            fn f(_: std.mem.Allocator) anyerror![]const u8 {
+                return body;
+            }
+        }.f,
+    };
+}
+
+const example = [_]Case{
+    text("prefix/support.anthropic.json", support.Support.prefix.json ++ "\n"),
+    text("prefix/triage.openai.json", support.TriageAgent.prefix.json ++ "\n"),
+    text("prefix/reply_writer.anthropic.json", support.ReplyWriter.prefix.json ++ "\n"),
+    text("mermaid/handle_ticket.mmd", support.HandleTicket.mermaid),
+    text("manifest/support.json", z.capi.manifest.json(support.App) ++ "\n"),
+    text("header/support.h", z.capi.header.render(support.App, "support")),
+};
+
+pub const all = example ++ schemaCases(fx.Order, "order") ++
     schemaCases(fx.Ticket, "ticket") ++
     schemaCases(fx.Triage, "triage") ++
     schemaCases(fx.Resolution, "resolution") ++

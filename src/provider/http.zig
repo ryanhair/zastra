@@ -24,6 +24,9 @@ pub const Options = struct {
     max_retries: u8 = 2,
     base_backoff_ms: u32 = 500,
     max_backoff_ms: u32 = 20_000,
+    /// Record every response body to `<dir>/<n>.sse` (with `<n>.json` holding
+    /// the URL and status), to make cassettes from real traffic (PLAN.md §10).
+    record_dir: ?[]const u8 = null,
 };
 
 pub const Error = error{
@@ -86,6 +89,7 @@ pub const Http = struct {
     client: std.http.Client,
     replay: ?*Replay = null,
     proxy_arena: std.heap.ArenaAllocator,
+    record_count: std.atomic.Value(u32) = .init(0),
 
     /// Loads CA certificates now, so a missing store fails at startup rather
     /// than on the first request.
@@ -165,11 +169,31 @@ pub const Http = struct {
                 408, 409, 429, 500...599 => true,
                 else => false,
             };
-            if (!retryable or last) return res;
+            if (!retryable or last) {
+                if (h.opts.record_dir) |dir| h.record(dir, url, res) catch |err| std.log.warn("zastra: recording cassette: {t}", .{err});
+                return res;
+            }
             const retry_after = res.retry_after_ms;
             res.close();
             try h.backoff(tries, retry_after);
         }
+    }
+
+    /// Read the whole body, save it, and replace the response reader with a
+    /// fixed reader over the saved bytes.
+    fn record(h: *Http, dir_path: []const u8, url: []const u8, res: *Response) !void {
+        const body = try res.readAll(h.gpa, 64 << 20);
+        const n = h.record_count.fetchAdd(1, .monotonic);
+        var dir = try Io.Dir.cwd().createDirPathOpen(h.io, dir_path, .{});
+        defer dir.close(h.io);
+        var name_buf: [32]u8 = undefined;
+        try dir.writeFile(h.io, .{ .sub_path = try std.fmt.bufPrint(&name_buf, "{d:0>3}.sse", .{n}), .data = body });
+        const meta = try std.fmt.allocPrint(h.gpa, "{{\"url\":\"{s}\",\"status\":{d}}}\n", .{ url, res.status });
+        defer h.gpa.free(meta);
+        try dir.writeFile(h.io, .{ .sub_path = try std.fmt.bufPrint(&name_buf, "{d:0>3}.json", .{n}), .data = meta });
+        res.recorded = body;
+        res.fixed = .fixed(body);
+        res.reader = &res.fixed;
     }
 
     fn backoff(h: *Http, n: u8, retry_after_ms: ?u64) Error!void {
@@ -325,6 +349,8 @@ pub const Response = struct {
     reader: *Io.Reader = undefined,
     replayed: bool = false,
     fixed: Io.Reader = undefined,
+    /// Body captured by cassette recording (owned).
+    recorded: ?[]u8 = null,
     live: Live,
 
     const Live = struct {
@@ -360,6 +386,7 @@ pub const Response = struct {
 
     pub fn close(r: *Response) void {
         const gpa = r.http.gpa;
+        if (r.recorded) |b| gpa.free(b);
         if (!r.replayed) r.live.req.deinit();
         gpa.destroy(r);
     }

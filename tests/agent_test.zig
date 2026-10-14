@@ -351,3 +351,25 @@ test "sqlite: a conversation survives a process restart" {
     try t.expect(std.mem.indexOf(u8, replay.requests.items[1], "pineapple") != null);
     try t.expect(std.mem.indexOf(u8, replay.requests.items[1], "Hi there, friend.") != null);
 }
+
+const Charge = struct {
+    pub const description = "Charge the customer's card.";
+    pub const Input = struct { cents: u32 };
+    pub const Output = struct { ok: bool };
+    pub const effects = .{.spends_money};
+    pub fn execute(_: *z.ToolCtx(Ctx), _: Input) !Output {
+        return .{ .ok = true };
+    }
+};
+const Biller = z.Agent(Ctx, .{ .name = "biller", .model = "anthropic/claude-sonnet-5-5", .tools = .{Charge} });
+
+test "D8: tools that spend money require approval by default" {
+    try t.expect(Biller.has_approvals);
+    const App3 = z.App(.{ .ctx = Ctx, .agents = .{Biller} });
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App3, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Biller, &.{.tool(Charge, .{ .cents = 100 })});
+    try t.expectError(error.ApprovalRequired, h.agent(Biller).generate("charge", .{}));
+}

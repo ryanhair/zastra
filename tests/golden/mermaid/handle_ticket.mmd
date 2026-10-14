@@ -1,0 +1,33 @@
+flowchart TD
+    start([handle_ticket])
+    triage[triage]
+    start --> triage
+    branch_0{branch}
+    triage --> branch_0
+    subgraph refund_sub [refund]
+    refund_start((refund))
+    refund_fetch_order[fetch_order]
+    refund_start --> refund_fetch_order
+    refund_approve_refund[[approve_refund ⏸]]
+    refund_fetch_order --> refund_approve_refund
+    end
+    branch_0 -->|arm 0| refund_start
+    subgraph answer_sub [answer]
+    answer_start((answer))
+    answer_parallel_order_faq_fork[/parallel_order_faq/]
+    answer_start --> answer_parallel_order_faq_fork
+    answer_parallel_order_faq_join[\join\]
+    answer_parallel_order_faq_order[fetch_order]
+    answer_parallel_order_faq_fork --> answer_parallel_order_faq_order
+    answer_parallel_order_faq_order --> answer_parallel_order_faq_join
+    answer_parallel_order_faq_faq[search_faq]
+    answer_parallel_order_faq_fork --> answer_parallel_order_faq_faq
+    answer_parallel_order_faq_faq --> answer_parallel_order_faq_join
+    answer_draft_reply[draft_reply]
+    answer_parallel_order_faq_join --> answer_draft_reply
+    end
+    branch_0 -->|otherwise| answer_start
+    notify_customer[notify_customer]
+    refund_approve_refund --> notify_customer
+    answer_draft_reply --> notify_customer
+    notify_customer --> finish([end])

@@ -124,6 +124,8 @@ pub fn App(comptime cfg: anytype) type {
                 http: struct {
                     timeout_ms: u32 = 120_000,
                     max_retries: u8 = 2,
+                    /// Save response bodies here, to build test cassettes.
+                    record_dir: ?[]const u8 = null,
                 } = .{},
                 /// Test harness hooks. Not for production use.
                 testing: ?Testing = null,
@@ -186,6 +188,7 @@ pub fn App(comptime cfg: anytype) type {
                         .ca_bundle = opts.ca_bundle,
                         .timeout_ms = opts.http.timeout_ms,
                         .max_retries = opts.http.max_retries,
+                        .record_dir = opts.http.record_dir,
                     }, opts.env) catch |err| {
                         if (err == error.NoCaCertificates) st.diag.set(0, "no CA certificates found in the system store; pass `.ca_bundle = .{ .pem = @embedFile(\"cacert.pem\") }` to App.init (common in FROM scratch containers)");
                         if (err == error.CaBundleInvalid) st.diag.set(0, "the CA bundle given to App.init couldn't be parsed");

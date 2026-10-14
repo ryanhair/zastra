@@ -68,3 +68,19 @@ test "unions" {
     try std.testing.expect(w.items[2].p.q);
     try expectIssue(W, "{\"items\":[{\"type\":\"x\"}]}", "$.items[0]", "\"type\" must be one of");
 }
+
+test "fuzz: validated parse never crashes" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) anyerror!void {
+            var buf: [512]u8 = undefined;
+            const n = smith.slice(&buf);
+            var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+            defer arena.deinit();
+            var issue: parse.Issue = .{};
+            _ = parse.parse(Triage, arena.allocator(), buf[0..n], &issue) catch {};
+        }
+    }.f, .{ .corpus = &.{
+        "{\"category\":\"refund\",\"urgency\":3,\"summary\":\"x\"}",
+        "{\"category\":\"shipping\",\"urgency\":9,\"summary\":\"y\",\"tags\":[\"a\"]}",
+    } });
+}

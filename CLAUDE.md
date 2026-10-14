@@ -19,7 +19,10 @@ A Mastra-style agent framework for Zig (agents, tools, workflows, memory, MCP, t
 - No feature flags in build.zig. Size must follow usage (PLAN.md §5.6).
 - Public API changes: update `sketch/` and the relevant PLAN.md section in the same change.
 
-## Commands (once M0 lands)
-- `zig build test`: unit, golden and compile-fail tests
+## Commands
+- `zig build test`: unit, integration, golden and compile-fail tests
 - `zig build golden -- --update`: refresh golden files
-- `zig build dev -- <cmd>`: dev CLI against `examples/support`
+- `zig build compile-fail`: compile-fail tests only (`tests/compile_fail/*.zig`, `//! expect:` lines)
+- `zig build size`: binary-size budgets; `zig build models-update`: regenerate the catalog; `zig build docs`
+- In `examples/support`: `zig build test`, `zig build dev -- <cmd>`, `zig build lib`, `zig build embed`
+- Zig 0.16 caches fetched packages in `zig-pkg/` (git-ignored).

@@ -69,6 +69,17 @@ pub fn build(b: *std.Build) void {
     }) });
     test_step.dependOn(&b.addRunArtifact(integration).step);
 
+    // The support example's App, for golden prefixes, Mermaid, manifest and header.
+    const notify = b.createModule(.{ .root_source_file = b.path("examples/support/pkgs/notify/notify.zig") });
+    const support_app = b.createModule(.{
+        .root_source_file = b.path("examples/support/src/app.zig"),
+        .target = b.graph.host,
+        .imports = &.{
+            .{ .name = "zastra", .module = mod },
+            .{ .name = "notify", .module = notify },
+        },
+    });
+
     // Golden tests: tests/golden/main.zig renders every golden artifact and
     // compares it with the checked-in file. `zig build golden -- --update`
     // rewrites the files instead.
@@ -78,7 +89,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("tests/golden/main.zig"),
             .target = b.graph.host,
             .optimize = .Debug,
-            .imports = &.{.{ .name = "zastra", .module = mod }},
+            .imports = &.{
+                .{ .name = "zastra", .module = mod },
+                .{ .name = "support_app", .module = support_app },
+            },
         }),
     });
     const golden_check = b.addRunArtifact(golden_exe);
@@ -99,6 +113,13 @@ pub fn build(b: *std.Build) void {
     // aarch64-linux-musl at ReleaseSmall, with upper bounds. Variant 1 is also
     // built unstripped to check that it contains no OpenAI provider code.
     addSizeChecks(b, mod, sqlite_dep);
+
+    // API reference: `zig build docs` → zig-out/docs.
+    const docs_lib = b.addLibrary(.{ .name = "zastra", .linkage = .static, .root_module = mod });
+    const install_docs = b.addInstallDirectory(.{ .source_dir = docs_lib.getEmittedDocs(), .install_dir = .prefix, .install_subdir = "docs" });
+    b.step("docs", "Generate the API reference into zig-out/docs").dependOn(&install_docs.step);
+
+    // Model catalog regeneration (PLAN.md §5.4).
     const models_update = b.addExecutable(.{
         .name = "models-update",
         .root_module = b.createModule(.{
