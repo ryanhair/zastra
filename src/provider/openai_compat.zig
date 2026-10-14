@@ -19,7 +19,8 @@ pub fn buildPrefix(comptime parts: p.PrefixParts) p.Prefix {
         @setEvalBranchQuota(10_000_000);
         const s = parts.spec;
         var j: []const u8 = "{\"model\":" ++ p.jsonStr(s.id) ++ ",\"stream\":true,\"stream_options\":{\"include_usage\":true}";
-        if (parts.tools.len > 0) {
+        var insert_at: ?usize = null;
+        if (parts.tools.len > 0 or parts.dynamic_tools) {
             j = j ++ ",\"tools\":[";
             for (parts.tools, 0..) |t, i| {
                 j = j ++ (if (i == 0) "" else ",") ++ "{\"type\":\"function\",\"function\":{\"name\":" ++ p.jsonStr(t.name) ++
@@ -27,6 +28,7 @@ pub fn buildPrefix(comptime parts: p.PrefixParts) p.Prefix {
                     ",\"parameters\":" ++ t.schema ++
                     (if (t.strict_ok) ",\"strict\":true" else "") ++ "}}";
             }
+            if (parts.dynamic_tools) insert_at = j.len;
             j = j ++ "]";
         }
         if (parts.output) |o| j = j ++ ",\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":" ++
@@ -46,8 +48,19 @@ pub fn buildPrefix(comptime parts: p.PrefixParts) p.Prefix {
             j = j ++ "{\"role\":\"system\",\"content\":" ++ p.jsonStr(sys) ++ "}";
             open = 1;
         }
-        return .{ .json = j, .open_items = open, .hash = p.prefixHash(j) };
+        return .{ .json = j, .open_items = open, .hash = p.prefixHash(j), .tools_insert_at = insert_at, .static_tools = parts.tools.len };
     }
+}
+
+/// A runtime tool definition (MCP). Not strict: MCP schemas are arbitrary.
+pub fn writeToolDef(w: *Writer, tool_name: []const u8, description: []const u8, schema_json: []const u8) Writer.Error!void {
+    try w.writeAll("{\"type\":\"function\",\"function\":{\"name\":");
+    try p.W.str(w, tool_name);
+    try w.writeAll(",\"description\":");
+    try p.W.str(w, description);
+    try w.writeAll(",\"parameters\":");
+    try w.writeAll(schema_json);
+    try w.writeAll("}}");
 }
 
 pub fn writeBody(w: *Writer, req: p.Request) Writer.Error!void {

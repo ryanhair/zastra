@@ -23,15 +23,15 @@ pub fn buildPrefix(comptime parts: p.PrefixParts) p.Prefix {
         const cache = s.supports.prompt_caching;
         const cc = ",\"cache_control\":{\"type\":\"ephemeral\"}";
         var j: []const u8 = "{\"model\":" ++ p.jsonStr(s.id) ++ ",\"stream\":true";
-        if (parts.tools.len > 0) {
+        var insert_at: ?usize = null;
+        if (parts.tools.len > 0 or parts.dynamic_tools) {
             j = j ++ ",\"tools\":[";
             for (parts.tools, 0..) |t, i| {
                 const last = i == parts.tools.len - 1;
-                j = j ++ (if (i == 0) "" else ",") ++ "{\"name\":" ++ p.jsonStr(t.name) ++
-                    ",\"description\":" ++ p.jsonStr(t.description) ++
-                    ",\"input_schema\":" ++ t.schema ++
+                j = j ++ (if (i == 0) "" else ",") ++ toolJson(t) ++
                     (if (last and cache and parts.system == null) cc else "") ++ "}";
             }
+            if (parts.dynamic_tools) insert_at = j.len;
             j = j ++ "]";
         }
         if (parts.output != null or parts.effort != null) {
@@ -48,8 +48,24 @@ pub fn buildPrefix(comptime parts: p.PrefixParts) p.Prefix {
             j = j ++ ",\"system\":[{\"type\":\"text\",\"text\":" ++ p.jsonStr(sys) ++ (if (cache) cc else "") ++ "}";
             open = 1;
         }
-        return .{ .json = j, .open_items = open, .hash = p.prefixHash(j) };
+        return .{ .json = j, .open_items = open, .hash = p.prefixHash(j), .tools_insert_at = insert_at, .static_tools = parts.tools.len };
     }
+}
+
+/// A tool definition, without its closing brace (so cache_control can follow).
+fn toolJson(comptime t: p.ToolDef) []const u8 {
+    return "{\"name\":" ++ p.jsonStr(t.name) ++ ",\"description\":" ++ p.jsonStr(t.description) ++ ",\"input_schema\":" ++ t.schema;
+}
+
+/// A runtime tool definition (MCP), complete.
+pub fn writeToolDef(w: *Writer, tool_name: []const u8, description: []const u8, schema_json: []const u8) Writer.Error!void {
+    try w.writeAll("{\"name\":");
+    try p.W.str(w, tool_name);
+    try w.writeAll(",\"description\":");
+    try p.W.str(w, description);
+    try w.writeAll(",\"input_schema\":");
+    try w.writeAll(schema_json);
+    try w.writeByte('}');
 }
 
 /// Complete the request body: system suffix, max_tokens, tool_choice, messages.

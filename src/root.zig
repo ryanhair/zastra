@@ -29,6 +29,41 @@ pub const FinishReason = message.FinishReason;
 pub const catalog = @import("catalog/catalog.zig");
 pub const custom = catalog.custom;
 
+// ── declarations ─────────────────────────────────────────────────────────────
+pub const Agent = @import("agent/agent.zig").Agent;
+pub const App = @import("app.zig").App;
+pub const ToolCtx = @import("context.zig").ToolCtx;
+pub const Partial = @import("schema/partial.zig").Partial;
+pub const mcp = struct {
+    pub const stdio = @import("mcp/mcp.zig").stdio;
+    pub const tools = @import("mcp/mcp.zig").tools;
+};
+pub const prompt = struct {
+    pub const render = @import("prompt/template.zig").render;
+    pub const renderAlloc = @import("prompt/template.zig").renderAlloc;
+    pub const check = @import("prompt/template.zig").check;
+};
+pub const trace = struct {
+    const t = @import("trace/trace.zig");
+    pub const jsonl = t.jsonl;
+    pub const Config = t.Config;
+    pub const Span = t.Span;
+    pub const off: Config = .off;
+};
+pub const Decision = @import("agent/events.zig").Decision;
+
+pub const testing = struct {
+    const h = @import("testing/harness.zig");
+    pub const harness = h.harness;
+    pub const Harness = h.Harness;
+    pub const Step = h.Step;
+    pub const expectSuspended = h.expectSuspended;
+};
+pub const ToolResult = @import("agent/events.zig").ToolResult;
+pub const StepFinish = @import("agent/events.zig").StepFinish;
+pub const Finish = @import("agent/events.zig").Finish;
+pub const McpCall = @import("agent/events.zig").McpCall;
+
 /// The provider layer. Most apps never touch it directly; it's public for
 /// `rt.model(...)`-style raw use, custom transports and tests.
 pub const provider = struct {
@@ -74,4 +109,11 @@ test {
     _ = @import("provider/sse.zig");
     _ = @import("provider/http.zig");
     _ = @import("provider/provider.zig");
+    _ = @import("tool.zig");
+    _ = @import("trace/trace.zig");
+    _ = @import("prompt/template.zig");
+    _ = @import("meta/make.zig");
+    _ = @import("schema/partial.zig");
+    _ = @import("schema/comptime_json.zig");
+    _ = @import("storage/memory_store.zig");
 }

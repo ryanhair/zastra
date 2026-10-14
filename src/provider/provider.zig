@@ -55,6 +55,9 @@ pub const PrefixParts = struct {
     /// Raw JSON object members appended verbatim, e.g.
     /// `"thinking":{"type":"adaptive","display":"summarized"}`.
     extra: ?[]const u8 = null,
+    /// More tool definitions are added at runtime (MCP): always emit the
+    /// tools array and record where to insert them.
+    dynamic_tools: bool = false,
 };
 
 /// The precomputed request prefix. `json` is an unterminated JSON object;
@@ -65,6 +68,26 @@ pub const Prefix = struct {
     /// OpenAI `messages`) holding this many items.
     open_items: u32,
     hash: u64,
+    /// Byte offset just before the tools array's closing `]`, when the
+    /// prefix was built with `dynamic_tools`.
+    tools_insert_at: ?usize = null,
+    static_tools: u32 = 0,
+
+    /// Splice runtime tool definitions (comma-separated provider JSON) into
+    /// the tools array. Done once per agent at `App.init`.
+    pub fn withTools(p: Prefix, gpa: Allocator, defs_json: []const u8) Allocator.Error!Prefix {
+        const at = p.tools_insert_at orelse return p;
+        if (defs_json.len == 0) return p;
+        const sep = if (p.static_tools > 0) "," else "";
+        const json = try std.mem.concat(gpa, u8, &.{ p.json[0..at], sep, defs_json, p.json[at..] });
+        return .{
+            .json = json,
+            .open_items = p.open_items,
+            .hash = std.hash.Wyhash.hash(0, json),
+            .tools_insert_at = null,
+            .static_tools = p.static_tools,
+        };
+    }
 };
 
 pub fn prefixHash(comptime json: []const u8) u64 {

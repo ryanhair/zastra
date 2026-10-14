@@ -52,6 +52,9 @@ pub const Interaction = struct {
 /// bodies so tests can assert on what was sent.
 pub const Replay = struct {
     interactions: []const Interaction,
+    /// Computes responses instead of `interactions` (the test harness's
+    /// scripted models). Returns null for "no scripted response".
+    responder: ?Responder = null,
     next: usize = 0,
     requests: std.ArrayList([]u8) = .empty,
     gpa: Allocator,
@@ -65,6 +68,11 @@ pub const Replay = struct {
         for (r.requests.items) |b| r.gpa.free(b);
         r.requests.deinit(r.gpa);
     }
+
+    pub const Responder = struct {
+        ctx: *anyopaque,
+        respond: *const fn (ctx: *anyopaque, url: []const u8, headers: []const std.http.Header, body: []const u8) ?Interaction,
+    };
 
     pub fn remaining(r: *const Replay) usize {
         return r.interactions.len - r.next;
@@ -140,7 +148,7 @@ pub const Http = struct {
     /// connection failures, 408, 409, 429 and 5xx, honoring `Retry-After`.
     /// The returned response may have any status; the caller checks it.
     pub fn post(h: *Http, url: []const u8, headers: []const std.http.Header, body: []const u8) Error!*Response {
-        if (h.replay) |r| return h.postReplay(r, url, body);
+        if (h.replay) |r| return h.postReplay(r, url, headers, body);
 
         var tries: u8 = 0;
         while (true) : (tries += 1) {
@@ -262,10 +270,21 @@ pub const Http = struct {
         };
     }
 
-    fn postReplay(h: *Http, r: *Replay, url: []const u8, body: []const u8) Error!*Response {
+    fn postReplay(h: *Http, r: *Replay, url: []const u8, headers: []const std.http.Header, body: []const u8) Error!*Response {
         r.mutex.lockUncancelable(h.io);
         defer r.mutex.unlock(h.io);
         try r.requests.append(r.gpa, try r.gpa.dupe(u8, body));
+        if (r.responder) |rs| {
+            const ix = rs.respond(rs.ctx, url, headers, body) orelse {
+                std.debug.print("zastra replay: no scripted response for request to {s}\n", .{url});
+                return error.ConnectionFailed;
+            };
+            const res = try h.gpa.create(Response);
+            res.* = .{ .http = h, .status = ix.status, .replayed = true, .live = undefined };
+            res.fixed = .fixed(ix.body);
+            res.reader = &res.fixed;
+            return res;
+        }
         if (r.next >= r.interactions.len) {
             std.debug.print("zastra replay: unexpected request #{d} to {s}\n", .{ r.next + 1, url });
             return error.ConnectionFailed;

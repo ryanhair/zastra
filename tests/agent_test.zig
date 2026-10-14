@@ -1,0 +1,288 @@
+//! Agents end to end against scripted models (PLAN.md §6.4, §10).
+
+const std = @import("std");
+const z = @import("zastra");
+const t = std.testing;
+
+const Db = struct {
+    refunds: std.atomic.Value(u32) = .init(0),
+    lookups: std.atomic.Value(u32) = .init(0),
+};
+const Ctx = struct { db: *Db, auto_refund_limit_cents: u32 = 50_00 };
+
+const Order = struct { id: []const u8, total_cents: u32 };
+
+const LookupOrder = struct {
+    pub const description = "Look up an order by its ID.";
+    pub const Input = struct { order_id: []const u8 };
+    pub const Output = Order;
+    pub const ModelErrors = error{OrderNotFound};
+    pub const error_messages = .{ .OrderNotFound = "No order exists with that ID." };
+
+    pub fn execute(tc: *z.ToolCtx(Ctx), in: Input) !Output {
+        _ = tc.ctx.db.lookups.fetchAdd(1, .monotonic);
+        if (!std.mem.startsWith(u8, in.order_id, "ORD-")) return error.OrderNotFound;
+        return .{ .id = try tc.arena.dupe(u8, in.order_id), .total_cents = 90_00 };
+    }
+};
+
+const IssueRefund = struct {
+    pub const description = "Refund all or part of an order.";
+    pub const Input = struct { order_id: []const u8, amount_cents: u32 };
+    pub const Output = struct { refund_id: []const u8 };
+
+    pub fn needsApproval(tc: *z.ToolCtx(Ctx), in: Input) bool {
+        return in.amount_cents > tc.ctx.auto_refund_limit_cents;
+    }
+
+    pub fn execute(tc: *z.ToolCtx(Ctx), in: Input) !Output {
+        _ = in;
+        _ = tc.ctx.db.refunds.fetchAdd(1, .monotonic);
+        return .{ .refund_id = "R-1" };
+    }
+};
+
+const Triage = struct {
+    category: enum { refund, shipping, other },
+    urgency: u8,
+    summary: []const u8,
+    pub const constraints = .{ .urgency = .{ .min = 1, .max = 5 } };
+};
+
+const Notes = struct { name: ?[]const u8 = null, open_issues: []const []const u8 = &.{} };
+
+const Support = z.Agent(Ctx, .{
+    .name = "support",
+    .model = "anthropic/claude-sonnet-5-5",
+    .instructions = "You are a support agent.",
+    .tools = .{ LookupOrder, IssueRefund },
+    .memory = .{ .history = .{ .last_messages = 30 }, .working = Notes },
+});
+
+const TriageAgent = z.Agent(Ctx, .{
+    .name = "triage",
+    .model = "openai/gpt-5-mini",
+    .instructions = "Classify the ticket.",
+    .output = Triage,
+    .examples = &.{.{ .in = "Where is my parcel?", .out = Triage{ .category = .shipping, .urgency = 2, .summary = "Parcel status" } }},
+});
+
+/// No native structured output on this model: the final_answer tool is used.
+const TriageFallback = z.Agent(Ctx, .{
+    .name = "triage_fallback",
+    .model = "anthropic/claude-sonnet-4-6",
+    .output = Triage,
+});
+
+const App = z.App(.{ .ctx = Ctx, .agents = .{ Support, TriageAgent, TriageFallback } });
+
+test "tool loop: call, result, answer" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{
+        .tool(LookupOrder, .{ .order_id = "ORD-1" }),
+        .text("Your order ORD-1 is $90."),
+    });
+    const r = try h.agent(Support).generate("Where's ORD-1?", .{ .include_messages = true });
+    try t.expectEqualStrings("Your order ORD-1 is $90.", r.text);
+    try t.expectEqual(@as(u32, 2), r.steps);
+    try t.expectEqual(@as(u32, 1), db.lookups.load(.monotonic));
+    // user, assistant(tool_use), tool(result), assistant(text)
+    try t.expectEqual(@as(usize, 4), r.messages.len);
+    try t.expectEqualStrings("{\"id\":\"ORD-1\",\"total_cents\":9000}", r.messages[2].content.blocks[0].tool_result.content);
+    try t.expect(r.usage.cost_usd > 0);
+}
+
+test "ModelErrors go back to the model; the run continues" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{
+        .tool(LookupOrder, .{ .order_id = "nope" }),
+        .text("I couldn't find that order."),
+    });
+    const r = try h.agent(Support).generate("Where's nope?", .{ .include_messages = true });
+    const res = r.messages[2].content.blocks[0].tool_result;
+    try t.expect(res.is_error);
+    try t.expectEqualStrings("No order exists with that ID.", res.content);
+    // The error result reached the provider as an is_error tool_result.
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "\"is_error\":true") != null);
+}
+
+test "streaming: exhaustive events, typed tool calls and approvals" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{
+        .tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 90_00 }),
+        .text("Refunded."),
+    });
+    var stream = try h.agent(Support).stream("Refund ORD-1", .{});
+    defer stream.deinit();
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(t.allocator);
+    var approvals: u32 = 0;
+    var calls: u32 = 0;
+    var finished = false;
+    while (try stream.next()) |event| switch (event) {
+        .text_delta => |d| try text.appendSlice(t.allocator, d),
+        .reasoning_delta => {},
+        .tool_call => |call| switch (call) {
+            .lookup_order => {},
+            .issue_refund => |in| {
+                try t.expectEqual(@as(u32, 90_00), in.amount_cents);
+                calls += 1;
+            },
+        },
+        .tool_result => |r| try t.expectEqualStrings("issue_refund", r.name()),
+        .approval_request => |req| switch (req.call) {
+            .issue_refund => |in| {
+                try t.expectEqualStrings("ORD-1", in.order_id);
+                approvals += 1;
+                // Not responding yet: next() refuses to continue.
+                try t.expectError(error.ApprovalPending, stream.next());
+                try stream.respond(req.id, .approve);
+            },
+        },
+        .step_finish => {},
+        .finish => |f| {
+            try t.expectEqual(z.FinishReason.end_turn, f.reason);
+            finished = true;
+        },
+    };
+    try t.expect(finished);
+    try t.expectEqual(@as(u32, 1), approvals);
+    try t.expectEqual(@as(u32, 1), calls);
+    try t.expectEqual(@as(u32, 1), db.refunds.load(.monotonic));
+    try t.expectEqualStrings("Refunded.", text.items);
+}
+
+test "denied approvals are reported to the model; generate needs on_approval" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{.tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 90_00 })});
+    try t.expectError(error.ApprovalRequired, h.agent(Support).generate("Refund", .{}));
+    try t.expect(std.mem.indexOf(u8, h.rt.lastDiagnostic(), "needs approval") != null);
+
+    h.script(Support, &.{
+        .tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 90_00 }),
+        .text("I can't refund that."),
+    });
+    const Deny = struct {
+        fn decide(_: ?*anyopaque, call: Support.ApprovalCall) z.Decision {
+            _ = call;
+            return .{ .deny = "Over limit" };
+        }
+    };
+    const r = try h.agent(Support).generate("Refund", .{ .on_approval = .{ .decide = Deny.decide } });
+    try t.expectEqualStrings("I can't refund that.", r.text);
+    try t.expectEqual(@as(u32, 0), db.refunds.load(.monotonic));
+    try t.expect(std.mem.indexOf(u8, h.requests()[2], "The user denied this tool call: Over limit") != null);
+}
+
+test "small refunds skip approval" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{
+        .tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 10_00 }),
+        .text("Done."),
+    });
+    _ = try h.agent(Support).generate("Refund $10", .{});
+    try t.expectEqual(@as(u32, 1), db.refunds.load(.monotonic));
+}
+
+test "parallel tool calls in one turn" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{
+        .tools(&.{ .{ .lookup_order = .{ .order_id = "ORD-1" } }, .{ .lookup_order = .{ .order_id = "ORD-2" } }, .{ .lookup_order = .{ .order_id = "ORD-3" } } }),
+        .text("Found all three."),
+    });
+    const r = try h.agent(Support).generate("Look up three orders", .{ .include_messages = true });
+    try t.expectEqual(@as(u32, 3), db.lookups.load(.monotonic));
+    // All results go back in one message, in call order.
+    const results = r.messages[2].content.blocks;
+    try t.expectEqual(@as(usize, 3), results.len);
+    try t.expect(std.mem.indexOf(u8, results[2].tool_result.content, "ORD-3") != null);
+}
+
+test "structured output: native, with one repair attempt" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(TriageAgent, &.{.output(.{ .category = .refund, .urgency = 4, .summary = "Broken item" })});
+    const r = try h.agent(TriageAgent).generate("My order arrived smashed", .{});
+    try t.expectEqual(.refund, r.output.category);
+    try t.expectEqual(@as(u8, 4), r.output.urgency);
+    // The schema went out as response_format, and the example is in the system prompt.
+    try t.expect(std.mem.indexOf(u8, h.requests()[0], "\"response_format\":{\"type\":\"json_schema\"") != null);
+    try t.expect(std.mem.indexOf(u8, h.requests()[0], "Output: {\\\"category\\\":\\\"shipping\\\"") != null);
+
+    // Invalid, then valid after the repair message.
+    h.script(TriageAgent, &.{
+        .raw("{\"category\":\"refund\",\"urgency\":9,\"summary\":\"x\"}"),
+        .output(.{ .category = .refund, .urgency = 5, .summary = "x" }),
+    });
+    const r2 = try h.agent(TriageAgent).generate("Help!", .{});
+    try t.expectEqual(@as(u8, 5), r2.output.urgency);
+    try t.expect(std.mem.indexOf(u8, h.requests()[2], "$.urgency: must be at most 5, got 9") != null);
+
+    // Invalid twice: OutputInvalid with the raw text in the diagnostic.
+    h.script(TriageAgent, &.{ .raw("not json"), .raw("still not json") });
+    try t.expectError(error.OutputInvalid, h.agent(TriageAgent).generate("?", .{}));
+    try t.expect(std.mem.indexOf(u8, h.rt.lastDiagnostic(), "still not json") != null);
+}
+
+test "structured output: final_answer tool fallback" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(TriageFallback, &.{.output(.{ .category = .other, .urgency = 1, .summary = "Question" })});
+    const r = try h.agent(TriageFallback).generate("What are your hours?", .{});
+    try t.expectEqual(.other, r.output.category);
+    try t.expect(std.mem.indexOf(u8, h.requests()[0], "\"name\":\"final_answer\"") != null);
+}
+
+test "memory: history across runs and typed working memory" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    const NotesPatch = z.Partial(Notes);
+    _ = NotesPatch;
+    h.script(Support, &.{.text("Hi Ada!")});
+    _ = try h.agent(Support).generate("I'm Ada", .{ .thread = "t1", .resource = "c1" });
+    h.script(Support, &.{.text("You said you're Ada.")});
+    _ = try h.agent(Support).generate("What's my name?", .{ .thread = "t1", .resource = "c1" });
+    // The second request carries the first exchange.
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "I'm Ada") != null);
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "Hi Ada!") != null);
+    // A different thread doesn't.
+    h.script(Support, &.{.text("Hello.")});
+    _ = try h.agent(Support).generate("Hi", .{ .thread = "t2", .resource = "c1" });
+    try t.expect(std.mem.indexOf(u8, h.requests()[2], "I'm Ada") == null);
+}
+
+test "prefix is byte-identical across calls" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Support, &.{ .text("a"), .text("b") });
+    _ = try h.agent(Support).generate("one", .{});
+    _ = try h.agent(Support).generate("two", .{});
+    try t.expect(std.mem.startsWith(u8, h.requests()[0], Support.prefix.json));
+    try t.expect(std.mem.startsWith(u8, h.requests()[1], Support.prefix.json));
+}
