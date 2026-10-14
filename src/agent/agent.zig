@@ -147,6 +147,12 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             for (0..n) |i| {
                 const ex = cfg.examples[i];
                 if (!@hasField(@TypeOf(ex), "in") or !@hasField(@TypeOf(ex), "out")) errors.fail("{s}: example {d} needs `.in` and `.out`", .{ who, i });
+                const O = @TypeOf(ex.out);
+                if (O != Output_ and @typeInfo(O) == .@"struct") for (std.meta.fields(O)) |f| {
+                    if (!@hasField(Output_, f.name)) errors.fail("{s}: example {d}'s `.out` has field `{s}`, which is not a field of {s}{s}", .{
+                        who, i, f.name, reflect.shortTypeName(Output_), errors.didYouMean(f.name, reflect.fieldNames(Output_)),
+                    });
+                };
                 const out: Output_ = ex.out; // a renamed field breaks here, at compile time
                 const in_text = if (reflect.isString(@TypeOf(ex.in))) ex.in else comptime_json.of(@TypeOf(ex.in), ex.in);
                 text = text ++ "\n\nInput: " ++ in_text ++ "\nOutput: " ++ comptime_json.of(Output_, out);

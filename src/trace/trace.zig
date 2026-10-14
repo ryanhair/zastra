@@ -58,7 +58,7 @@ pub const Tracer = struct {
         var raw: [8]u8 = undefined;
         t.io.random(&raw);
         var out: [16]u8 = undefined;
-        _ = std.fmt.bufPrint(&out, "{x}", .{std.mem.readInt(u64, &raw, .little)}) catch unreachable;
+        _ = std.fmt.bufPrint(&out, "{x:0>16}", .{std.mem.readInt(u64, &raw, .little)}) catch unreachable;
         return out;
     }
 
