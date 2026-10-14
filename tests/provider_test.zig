@@ -179,3 +179,45 @@ test "openai: parallel tool calls accumulate by index" {
     try t.expectEqualStrings("{\"order_id\":\"ORD-1042\"}", bs[0].tool_use.input_json);
     try t.expectEqualStrings("issue_refund", bs[1].tool_use.name);
 }
+
+/// Accepts one connection, sends headers and one event, then goes silent.
+fn stallingServer(io: std.Io, server: *std.Io.net.Server) !void {
+    const conn = try server.accept(io);
+    defer conn.close(io);
+    var rbuf: [4096]u8 = undefined;
+    var r = conn.reader(io, &rbuf);
+    _ = r.interface.peekGreedy(1) catch {};
+    var wbuf: [512]u8 = undefined;
+    var w = conn.writer(io, &wbuf);
+    try w.interface.writeAll("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n");
+    const ev = "event: ping\ndata: {\"type\":\"ping\"}\n\n";
+    try w.interface.print("{x}\r\n{s}\r\n", .{ ev.len, ev });
+    try w.interface.flush();
+    try io.sleep(.fromSeconds(30), .awake);
+}
+
+test "idle timeout: a stream that goes silent fails with Timeout" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const addr: std.Io.net.IpAddress = try .parseIp4("127.0.0.1", 0);
+    var server = try addr.listen(t.io, .{});
+    defer server.deinit(t.io);
+    var fut = try t.io.concurrent(stallingServer, .{ t.io, &server });
+    defer fut.cancel(t.io) catch {};
+
+    var h: P.http.Http = try .init(t.allocator, t.io, .{ .idle_timeout_ms = 100, .max_retries = 0 }, null);
+    defer h.deinit();
+    const url = try std.fmt.allocPrint(arena.allocator(), "http://127.0.0.1:{d}", .{server.socket.address.getPort()});
+    var diag: P.Diagnostic = .{};
+    const prefix = comptime P.anthropic.buildPrefix(.{ .spec = spec("anthropic/claude-haiku-4-5") });
+    var text: std.ArrayList(u8) = .empty;
+    try t.expectError(error.Timeout, collect(P.anthropic, arena.allocator(), &h, .{
+        .base_url = url,
+        .api_key = "k",
+        .prefix = prefix,
+        .messages = &.{.user("Hi")},
+        .max_tokens = 100,
+        .diag = &diag,
+    }, &text));
+    try t.expect(std.mem.startsWith(u8, diag.message(), "no data from the provider for 100 ms"));
+}

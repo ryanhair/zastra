@@ -123,6 +123,8 @@ pub fn App(comptime cfg: anytype) type {
                 ca_bundle: http.CaBundle = .system,
                 http: struct {
                     timeout_ms: u32 = 120_000,
+                    /// Time allowed between bytes of a streaming response; 0 disables it.
+                    idle_timeout_ms: u32 = 300_000,
                     max_retries: u8 = 2,
                     /// Save response bodies here, to build test cassettes.
                     record_dir: ?[]const u8 = null,
@@ -187,6 +189,7 @@ pub fn App(comptime cfg: anytype) type {
                     st.http = http.Http.init(gpa, io, .{
                         .ca_bundle = opts.ca_bundle,
                         .timeout_ms = opts.http.timeout_ms,
+                        .idle_timeout_ms = opts.http.idle_timeout_ms,
                         .max_retries = opts.http.max_retries,
                         .record_dir = opts.http.record_dir,
                     }, opts.env) catch |err| {

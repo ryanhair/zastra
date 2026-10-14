@@ -195,6 +195,14 @@ pub fn statusError(status: u16, body: []const u8, diag: ?*Diagnostic) Error {
     };
 }
 
+/// Map a failed body read, explaining an idle timeout in `diag`.
+pub fn bodyReadError(res: *@import("http.zig").Response, diag: ?*Diagnostic) Error {
+    const err = res.readError();
+    if (err == error.Timeout) if (diag) |d|
+        d.print(0, "no data from the provider for {d} ms (raise `.http.idle_timeout_ms` in App.init for slow reasoning models)", .{res.http.opts.idle_timeout_ms});
+    return err;
+}
+
 pub fn mapHttpError(err: anyerror) Error {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,

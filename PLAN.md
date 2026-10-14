@@ -541,6 +541,7 @@ Notes:
 `http.zig` (built on `std.http.Client`; see D12 and the M0 spike notes in §11):
 - one shared `std.http.Client` per runtime
 - per-request timeout. `std.http` has none, so the request runs in `io.concurrent` raced against an `io.sleep`, and the loser is cancelled.
+- idle timeout while reading the body (`.http.idle_timeout_ms`, default 300 s, 0 disables it). Every network read the body reader makes is raced against a timer the same way; reads served from already-buffered bytes skip the race. A stalled stream fails with `error.Timeout` and a diagnostic. The default is generous because OpenAI-compatible servers can stay silent while a reasoning model thinks; Anthropic sends `ping` events.
 - retry with jittered exponential backoff on 429, 5xx, and connection reset
   - **Only before the first response-body byte.** A stream that fails after emitting events is never retried transparently, since that would duplicate deltas. It fails with `error.StreamInterrupted`.
 - `Retry-After` is respected
@@ -970,15 +971,33 @@ Decisions made so far, with the recommended default for each open item. Revise t
 
 ## 14. Deferred (v1.1 / v2)
 
-**v1.1**
-- `z.DynamicAgent`
-- `z.step.loop`
-- persisted agent approvals
-- MCP Streamable HTTP
-- OTLP exporter
-- `dev serve` (HTTP+SSE)
-- working-memory migrations
-- `z.testing.arbitrary(T)` plus fuzzing of tools
+**v1.1** (everything deferred to v1.1 elsewhere in this plan, in one place; v1.1 planning orders and trims it)
+
+Agents and providers
+- `z.DynamicAgent`: runtime model string, instructions, tool subset, JSON-typed output (D2, D15)
+- persisted agent runs while awaiting approval (D9); then approval-gated agents inside workflow steps suspend the workflow instead of being a compile error (D18)
+- incremental structured-output streaming: `stream_parse` and `.output_partial` events (§5.15)
+- OpenAI Responses API as a third dialect, so OpenAI reasoning items round-trip across tool steps (§6.2)
+- nested tool-result blocks, if image results are needed (D25)
+
+Workflows
+- `z.step.loop` with a comptime- or runtime-bounded iteration count (§5.7)
+- cancel sibling branches early when one parallel branch fails (§6.6)
+
+Memory
+- working-memory migrations; today a changed `T` resets to the default (§6.5)
+
+MCP
+- Streamable HTTP transport (§6.7)
+- refresh tool lists on `notifications/tools/list_changed`; today they're fixed at `App.init` (§6.7)
+
+Tracing and tooling
+- OTLP exporter (§6.8)
+- `dev serve`: HTTP + SSE over the dev CLI commands (§8)
+- `z.testing.arbitrary(T)` plus fuzzing of tools (§3)
+
+Candidates, not committed
+- client-side `pattern` enforcement; needs a small regex engine (D27)
 
 **v2**
 - semantic recall and a vector store interface (sqlite-vec first)
@@ -1028,4 +1047,6 @@ All milestones M0–M7 are implemented. What was verified, and how:
 
 **Not verified:** a successful live completion. No Anthropic key was available, and the OpenAI key in the development environment had no credits (`insufficient_quota`). The live paths up to the provider's response were exercised; full live runs are the first thing to do with working keys (`zig build dev -- chat support`).
 
-**Known v1 limitations:** no incremental `output_partial` streaming (§5.15, v1.1); parallel workflow branches don't cancel siblings early (§6.6); `pattern` constraints aren't enforced client-side (D27); MCP tool lists are fixed at `App.init`; idle timeouts during a streaming response aren't implemented (only time-to-headers).
+**Known v1 limitations:** no incremental `output_partial` streaming (§5.15, v1.1); parallel workflow branches don't cancel siblings early (§6.6); `pattern` constraints aren't enforced client-side (D27); MCP tool lists are fixed at `App.init`. The full v1.1 list is in §14.
+
+**After v1 (2026-10-14):** added the body idle timeout (§6.2), tested against a local server that sends one event and goes silent.

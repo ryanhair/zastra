@@ -1,6 +1,7 @@
 //! HTTP for providers (PLAN.md §6.2, D12): `std.http.Client` plus retries,
-//! a time-to-headers timeout, eager CA-bundle loading, proxies from the
-//! environment, and a replay transport for tests.
+//! a time-to-headers timeout, an idle timeout while reading the body, eager
+//! CA-bundle loading, proxies from the environment, and a replay transport
+//! for tests.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -20,6 +21,10 @@ pub const Options = struct {
     ca_bundle: CaBundle = .system,
     /// Time allowed until response headers arrive, per attempt.
     timeout_ms: u32 = 120_000,
+    /// Time allowed between bytes of the response body. Anthropic sends
+    /// `ping` events, but OpenAI-compatible servers can stay silent while a
+    /// reasoning model thinks, so the default is generous. 0 disables it.
+    idle_timeout_ms: u32 = 300_000,
     /// Retries after the first attempt, for 408/409/429/5xx and connection errors.
     max_retries: u8 = 2,
     base_backoff_ms: u32 = 500,
@@ -282,6 +287,10 @@ pub const Http = struct {
         res.retry_after_ms = retryAfter(resp.head);
         res.live.response = resp;
         res.reader = res.live.response.reader(&res.live.transfer_buf);
+        if (h.opts.idle_timeout_ms != 0) {
+            res.live.idle = .init(h.io, res.reader, h.opts.idle_timeout_ms, &res.live.idle_buf);
+            res.reader = &res.live.idle.interface;
+        }
         return res;
     }
 
@@ -358,6 +367,8 @@ pub const Response = struct {
         response: std.http.Client.Response,
         redirect_buf: [1024]u8,
         transfer_buf: [16 * 1024]u8,
+        idle: IdleReader,
+        idle_buf: [16 * 1024]u8,
     };
 
     pub fn ok(r: *const Response) bool {
@@ -381,7 +392,14 @@ pub const Response = struct {
     /// `error.ReadFailed` (M0 spike), so check the task's cancel state.
     pub fn readError(r: *Response) Error {
         r.http.io.checkCancel() catch return error.Canceled;
+        if (r.idleTimedOut()) return error.Timeout;
         return error.StreamInterrupted;
+    }
+
+    /// True if the body read failed because no bytes arrived within
+    /// `idle_timeout_ms`.
+    pub fn idleTimedOut(r: *const Response) bool {
+        return !r.replayed and r.reader == &r.live.idle.interface and r.live.idle.timed_out;
     }
 
     pub fn close(r: *Response) void {
@@ -389,6 +407,68 @@ pub const Response = struct {
         if (r.recorded) |b| gpa.free(b);
         if (!r.replayed) r.live.req.deinit();
         gpa.destroy(r);
+    }
+};
+
+/// Wraps a body reader so that each network read must produce bytes within
+/// `ms`. `std.Io` has no read timeout for TCP streams, so a read that would
+/// block runs as a concurrent task raced against a timer, as in
+/// `attemptOnce`. On timeout the read is canceled (closing the request then
+/// drops the connection) and the reader fails with `timed_out` set.
+pub const IdleReader = struct {
+    io: Io,
+    inner: *Io.Reader,
+    ms: u32,
+    timed_out: bool = false,
+    interface: Io.Reader,
+
+    pub fn init(io: Io, inner: *Io.Reader, ms: u32, buffer: []u8) IdleReader {
+        return .{
+            .io = io,
+            .inner = inner,
+            .ms = ms,
+            .interface = .{ .vtable = &.{ .stream = stream }, .buffer = buffer, .seek = 0, .end = 0 },
+        };
+    }
+
+    fn stream(r: *Io.Reader, w: *Io.Writer, limit: Io.Limit) Io.Reader.StreamError!usize {
+        const self: *IdleReader = @alignCast(@fieldParentPtr("interface", r));
+        if (self.timed_out) return error.ReadFailed;
+        // Bytes already buffered by the inner reader don't touch the network.
+        if (self.inner.bufferedLen() > 0) return self.inner.stream(w, limit);
+
+        const Sel = Io.Select(union(enum) {
+            read: Io.Reader.StreamError!usize,
+            timeout: Io.Cancelable!void,
+        });
+        var buf: [2]Sel.Union = undefined;
+        var sel: Sel = .init(self.io, &buf);
+        sel.concurrent(.read, Io.Reader.stream, .{ self.inner, w, limit }) catch
+            return self.inner.stream(w, limit); // no concurrency available: no timeout
+        sel.concurrent(.timeout, Http.sleepMs, .{ self.io, self.ms }) catch {
+            const u = sel.await() catch {
+                drainIdle(&sel);
+                return error.ReadFailed;
+            };
+            drainIdle(&sel);
+            return u.read;
+        };
+        const first = sel.await() catch {
+            drainIdle(&sel);
+            return error.ReadFailed;
+        };
+        drainIdle(&sel);
+        switch (first) {
+            .read => |n| return n,
+            .timeout => {
+                self.timed_out = true;
+                return error.ReadFailed;
+            },
+        }
+    }
+
+    fn drainIdle(sel: anytype) void {
+        while (sel.cancel()) |_| {}
     }
 };
 
@@ -411,6 +491,34 @@ fn addPem(cb: *std.crypto.Certificate.Bundle, gpa: Allocator, pem: []const u8, n
         cb.bytes.items.len += n;
         try cb.parseCert(gpa, decoded_start, now_sec);
     }
+}
+
+test "idle timeout fails a stalled body read" {
+    const Stall = struct {
+        fn stream(_: *Io.Reader, _: *Io.Writer, _: Io.Limit) Io.Reader.StreamError!usize {
+            std.testing.io.sleep(.fromSeconds(30), .awake) catch return error.ReadFailed;
+            return 0;
+        }
+    };
+    var inner: Io.Reader = .{ .vtable = &.{ .stream = Stall.stream }, .buffer = &.{}, .seek = 0, .end = 0 };
+    var buf: [64]u8 = undefined;
+    var idle: IdleReader = .init(std.testing.io, &inner, 20, &buf);
+    const t0 = Io.Clock.Timestamp.now(std.testing.io, .awake);
+    try std.testing.expectError(error.ReadFailed, idle.interface.takeByte());
+    try std.testing.expect(idle.timed_out);
+    const elapsed = t0.untilNow(std.testing.io);
+    try std.testing.expect(elapsed.raw.toMilliseconds() < 5_000);
+}
+
+test "idle timeout passes data through" {
+    var inner: Io.Reader = .fixed("data: hi\n\n");
+    var buf: [4]u8 = undefined; // smaller than the data: several reads
+    var idle: IdleReader = .init(std.testing.io, &inner, 1_000, &buf);
+    var out: [32]u8 = undefined;
+    var w: Io.Writer = .fixed(&out);
+    const n = try idle.interface.streamRemaining(&w);
+    try std.testing.expectEqualStrings("data: hi\n\n", out[0..n]);
+    try std.testing.expect(!idle.timed_out);
 }
 
 test "replay transport" {

@@ -252,7 +252,7 @@ pub const Stream = struct {
             _ = s.scratch.reset(.retain_capacity);
             const ev = s.events.next() catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => return s.res.readError(),
+                else => return p.bodyReadError(s.res, s.diag),
             } orelse {
                 if (s.stop_reason != null) return s.finish();
                 return error.StreamInterrupted;
