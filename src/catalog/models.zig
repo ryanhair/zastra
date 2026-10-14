@@ -56,7 +56,7 @@ pub const models = [_]Model{
         .id = "claude-opus-4-7",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = false, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
         .pricing = .{ .input = 5, .output = 25, .cache_read = 0.5, .cache_write = 6.25 },
     },
     .{
@@ -64,7 +64,7 @@ pub const models = [_]Model{
         .id = "claude-opus-4-6",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = false, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
         .pricing = .{ .input = 5, .output = 25, .cache_read = 0.5, .cache_write = 6.25 },
     },
     .{
@@ -88,7 +88,7 @@ pub const models = [_]Model{
         .id = "claude-sonnet-4-6",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = false, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
         .pricing = .{ .input = 3, .output = 15, .cache_read = 0.3, .cache_write = 3.75 },
     },
     .{

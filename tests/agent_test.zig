@@ -70,7 +70,7 @@ const TriageAgent = z.Agent(Ctx, .{
 /// No native structured output on this model: the final_answer tool is used.
 const TriageFallback = z.Agent(Ctx, .{
     .name = "triage_fallback",
-    .model = "anthropic/claude-sonnet-4-6",
+    .model = z.custom(.{ .provider = .anthropic, .id = "claude-legacy", .supports = .{ .structured_output = false } }),
     .output = Triage,
 });
 

@@ -420,7 +420,8 @@ fn chatWith(comptime A: type, rt: *App.Runtime, gpa: Allocator, io: Io, out: Out
                         const yes = if (ans) |a| (a.len > 0 and (a[0] == 'y' or a[0] == 'Y')) else false;
                         try s.respond(payload.id, if (yes) .approve else .{ .deny = "Denied by the operator." });
                     } else if (comptime std.mem.eql(u8, t, "finish")) {
-                        out.print("\n  [{t}, {d} steps, {d} in / {d} out tokens, ${d:.5}]\n", .{ payload.reason, payload.steps, payload.usage.input_tokens, payload.usage.output_tokens, payload.usage.cost_usd });
+                        const u = payload.usage;
+                        out.print("\n  [{t}, {d} steps, {d} in ({d} cached) / {d} out tokens, ${d:.5}]\n", .{ payload.reason, payload.steps, u.totalInput(), u.cache_read_tokens, u.output_tokens, u.cost_usd });
                     }
                 },
             }

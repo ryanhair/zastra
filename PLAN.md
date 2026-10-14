@@ -974,7 +974,6 @@ Decisions made so far, with the recommended default for each open item. Revise t
 **v1.1** (everything deferred to v1.1 elsewhere in this plan, in one place; v1.1 planning orders and trims it)
 
 Agents and providers
-- `z.DynamicAgent`: runtime model string, instructions, tool subset, JSON-typed output (D2, D15)
 - persisted agent runs while awaiting approval (D9); then approval-gated agents inside workflow steps suspend the workflow instead of being a compile error (D18)
 - incremental structured-output streaming: `stream_parse` and `.output_partial` events (§5.15)
 - OpenAI Responses API as a third dialect, so OpenAI reasoning items round-trip across tool steps (§6.2)
@@ -996,10 +995,15 @@ Tracing and tooling
 - `dev serve`: HTTP + SSE over the dev CLI commands (§8)
 - `z.testing.arbitrary(T)` plus fuzzing of tools (§3)
 
+From the live test
+- first-class thinking control on agents. Today it's only reachable through `provider_options`. On 5.x models thinking is on by default with `display: "omitted"`, so `.reasoning_delta` never fires without `display: "summarized"`.
+- `models-update` reads Anthropic capabilities from `GET /v1/models` when a key is available, instead of hand-copied flags
+
 Candidates, not committed
 - client-side `pattern` enforcement; needs a small regex engine (D27)
 
 **v2**
+- `z.DynamicAgent` (runtime model string, instructions, tool subset, JSON-typed output; D2, D15), only if a use case appears
 - semantic recall and a vector store interface (sqlite-vec first)
 - RAG utilities
 - evals runner (`z.eval(Agent, cases, scorers)` as test blocks; datasets via `@embedFile`, type-checked)
@@ -1045,7 +1049,19 @@ All milestones M0–M7 are implemented. What was verified, and how:
 | C ABI (§9) | `zig build embed`: `embed.c` builds, links `libsupport`, and runs (with fake keys, exercising the error paths) |
 | Cross-compile matrix (§10) | x86_64-linux-musl, aarch64-linux-musl, aarch64-macos, x86_64-windows all build |
 
-**Not verified:** a successful live completion. No Anthropic key was available, and the OpenAI key in the development environment had no credits (`insufficient_quota`). The live paths up to the provider's response were exercised; full live runs are the first thing to do with working keys (`zig build dev -- chat support`).
+**Live verification (2026-10-14, Anthropic):** passed. Covered:
+- the dev CLI chat with the tool loop and the approval prompt
+- native structured output (Sonnet 5.5) and the `final_answer` fallback
+- a streamed tool loop with summarized thinking, its signatures sent back within the run
+- history across runs with thinking blocks dropped (D30), with no 400
+- prompt-cache reads on later steps
+- `embed.c` streaming through the C ABI
+
+It also found two bugs, both fixed:
+- The catalog marked Opus 4.7, Opus 4.6 and Sonnet 4.6 as lacking native structured output; `GET /v1/models` says they have it.
+- The dev CLI's "in" token count left out cached tokens.
+
+**Not verified live:** OpenAI. The development key has no credits (`insufficient_quota`); the request, TLS and error paths were exercised.
 
 **Known v1 limitations:** no incremental `output_partial` streaming (§5.15, v1.1); parallel workflow branches don't cancel siblings early (§6.6); `pattern` constraints aren't enforced client-side (D27); MCP tool lists are fixed at `App.init`. The full v1.1 list is in §14.
 

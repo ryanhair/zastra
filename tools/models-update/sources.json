@@ -1,7 +1,7 @@
 {
  "generated": "2026-10-14",
  "sources": {
-  "anthropic": "claude-api skill model table (cached 2026-10-06) and shared/models.md; cache write = 1.25x input (5-minute TTL)",
+  "anthropic": "claude-api skill model table (cached 2026-10-06) and shared/models.md; cache write = 1.25x input (5-minute TTL); structured_output flags checked against GET /v1/models capabilities, 2026-10-14",
   "openai": "https://developers.openai.com/api/docs/pricing (Standard tier, short context), fetched 2026-10-14; model IDs from GET /v1/models. Context windows for gpt-5.4 and newer are not published on the pricing page and are assumed to match gpt-5 (400K/128K)."
  },
  "providers": {
@@ -136,7 +136,7 @@
    "max_output": 128000,
    "supports": {
     "tools": true,
-    "structured_output": false,
+    "structured_output": true,
     "vision": true,
     "reasoning": true,
     "parallel_tools": true,
@@ -158,7 +158,7 @@
    "max_output": 128000,
    "supports": {
     "tools": true,
-    "structured_output": false,
+    "structured_output": true,
     "vision": true,
     "reasoning": true,
     "parallel_tools": true,
@@ -224,7 +224,7 @@
    "max_output": 128000,
    "supports": {
     "tools": true,
-    "structured_output": false,
+    "structured_output": true,
     "vision": true,
     "reasoning": true,
     "parallel_tools": true,

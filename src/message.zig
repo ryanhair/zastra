@@ -149,6 +149,9 @@ pub fn fromJson(arena: Allocator, text: []const u8) !Message {
 }
 
 pub const Usage = struct {
+    /// Input tokens that were neither read from nor written to the prompt
+    /// cache. Total input = `input_tokens + cache_read_tokens + cache_write_tokens`
+    /// (the same split on every provider).
     input_tokens: u64 = 0,
     output_tokens: u64 = 0,
     cache_read_tokens: u64 = 0,
@@ -161,6 +164,10 @@ pub const Usage = struct {
         a.cache_read_tokens += b.cache_read_tokens;
         a.cache_write_tokens += b.cache_write_tokens;
         a.cost_usd += b.cost_usd;
+    }
+
+    pub fn totalInput(u: Usage) u64 {
+        return u.input_tokens + u.cache_read_tokens + u.cache_write_tokens;
     }
 };
 
