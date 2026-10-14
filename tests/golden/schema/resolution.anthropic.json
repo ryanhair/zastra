@@ -1,0 +1,1 @@
+{"type":"object","properties":{"kind":{"type":"string","enum":["refunded","answered","escalated"]},"message":{"type":"string"}},"required":["kind","message"],"additionalProperties":false}

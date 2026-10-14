@@ -1,0 +1,1 @@
+{"type":"object","properties":{"name":{"type":"string"},"preferred_contact":{"type":"string","enum":["email","sms"]},"open_issues":{"type":"array","items":{"type":"string"},"default":[]}},"required":[],"additionalProperties":false}
