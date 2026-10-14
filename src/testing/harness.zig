@@ -153,7 +153,7 @@ pub fn Harness(comptime AppT: type) type {
                     return wh.inner.start(wh.h.arena.allocator(), input, .{});
                 }
 
-                pub fn resumeStep(wh: @This(), comptime S: type, run_id: []const u8, value: S.Resume) !W.Result {
+                pub fn resumeStep(wh: @This(), comptime S: type, run_id: []const u8, value: Inner.ResumeOf(S)) !W.Result {
                     return wh.inner.resumeStep(S, wh.h.arena.allocator(), run_id, value);
                 }
             };

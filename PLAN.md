@@ -99,7 +99,7 @@ The full example lives in `sketch/`:
 - `z.Workflow(Ctx, name, Input)`, a builder with `.then`, `.branch`, `.commit`
 - `z.step.agent(Agent, .{ .input, .prompt })`
 - `z.step.parallel(.{ .key = Step, ... })`
-- `z.initial` (the workflow input, usable in `needs`) and `z.otherwise` (the default branch arm)
+- `z.initial(T)` (the workflow input, usable in `needs`; D21) and `z.otherwise` (the default branch arm)
 - `z.App(.{ .ctx, .agents, .workflows, .mcp, .storage })`
 - `z.mcp.stdio(argv)` and `z.mcp.tools(server_key, .{ .allow })`
 - `z.Retry`, `z.Suspendable(Step)`, `z.Partial(T)`, `z.custom(model_spec)`
@@ -511,7 +511,7 @@ pub const Block = union(enum) {
     text: []const u8,
     image: struct { media_type: []const u8, data: union(enum) { base64: []const u8, url: []const u8 } },
     tool_use: struct { id: []const u8, name: []const u8, input_json: []const u8 },
-    tool_result: struct { id: []const u8, content: []const Block, is_error: bool },
+    tool_result: struct { id: []const u8, name: []const u8, content: []const u8, is_error: bool }, // content is the JSON result
     reasoning: struct { text: []const u8, opaque_signature: ?[]const u8 },
     provider_opaque: struct { provider: Provider.Tag, json: []const u8 }, // must round-trip
 };
@@ -679,7 +679,8 @@ Parallel:
 - `z.step.parallel(.{ .a = A, .b = B })` runs its branches with `io.async`.
 - Its Output is a struct with fields `a: A.Output` and `b: B.Output`.
 - Each branch gets its own arena; outputs are copied into the run's arena on join (same reason as §6.4).
-- The first error cancels the siblings with `Future.cancel` and fails the step.
+- If any branch fails, the step fails with the first error (in declaration order) after all branches finish. Cancelling siblings early is v1.1 (branches only observe cancellation at `std.Io` cancellation points anyway).
+- Steps inside a parallel group can't suspend (compile error), and nested workflows can't be parallel branches in v1.
 
 Runner:
 - Executes the graph and writes a snapshot after each step. Only state is snapshotted; there are no continuations.
@@ -720,7 +721,7 @@ The dev CLI's `trace <run_id>` reads the JSONL and prints a tree.
 ### 6.9 Storage interface
 
 ```zig
-pub const Storage = struct { // comptime-selected; no vtable in the typed path
+pub const Storage = struct { // comptime-selected backend, reached through a small vtable
     pub fn appendMessages(...) !void;
     pub fn loadHistory(...) ![]Message;
     pub fn getWorkingMemory(...) !?[]const u8;
@@ -732,6 +733,8 @@ pub const Storage = struct { // comptime-selected; no vtable in the typed path
 ```
 
 - Backends: `.memory` (tests and scripts) and `.sqlite` (the vendored amalgamation, compiled through the build system as C).
+- Only the backend named in `z.App` is compiled into the runtime. Agent and workflow code is generic over the agent/workflow (not the App), so it reaches storage through a 7-entry vtable; the cost is one indirect call per storage operation.
+- The SQLite amalgamation is always compiled into a static library, but its objects are linked only when `sqlite3_*` symbols are referenced, i.e. only for Apps with `.storage = .sqlite`.
 - Concurrency: one connection per runtime, guarded by a `std.Io.Mutex`, in WAL mode.
 
 ---
@@ -946,6 +949,10 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D16 | Step execution guarantee | **At least once.** A crash or resume re-runs the step from the top. Idempotency is the step author's job; `w.run_id` plus the step ID is the recommended key (§6.6). |
 | D17 | Memory for agents called from workflow steps | `thread` = `"<run_id>/<step_id>"`, `resource` = the workflow's `start` option; both can be overridden per call (§6.5). |
 | D20 | Agent IDs | **Required `.name` in `z.Agent` config.** A type returned by a function is named after the call (`zastra.Agent(...)`), not the declaration it is assigned to, so the ID can't be derived from `pub const Support = ...`. Missing `.name` is a compile error that explains this. Mastra also requires agent names. |
+| D21 | `needs` on the workflow input | **`z.initial(T)`**, not a bare `z.initial`. A step's `StepCtx(Ctx, Step)` is fixed by its own signature, but one step can appear in workflows with different inputs, so `w.needs.<key>` needs its type written down. `.commit()` checks `T` against the innermost workflow's Input with a clear error. |
+| D22 | Workflow `Result` shape | `W.Result` has a `.suspended` arm only when some step in the graph can suspend, the same "only what this workflow can do" rule as agent `Event` unions. Switches stay exhaustive and minimal. |
+| D23 | Workflow snapshot migrations | Declared on the builder: `.migration(OldWorkflow.fingerprint_value, migrateFn)` before `.commit()`, since a committed workflow is a generated type and can't carry user declarations. |
+| D24 | Resume semantics | Resuming (and crash recovery) **replays the graph from the top**, skipping steps whose outputs are in the snapshot and re-taking recorded branch decisions. No continuations are stored. Branch predicates therefore must be pure functions of their input. |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | Default: return the error. Open. |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | Default: derived, with override. Open. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | Default: yes, needed for MCP pass-through. |

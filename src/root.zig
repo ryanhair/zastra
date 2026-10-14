@@ -52,6 +52,19 @@ pub const trace = struct {
 };
 pub const Decision = @import("agent/events.zig").Decision;
 
+// ── workflows ────────────────────────────────────────────────────────────────
+pub const Workflow = @import("workflow/workflow.zig").Workflow;
+pub const StepCtx = @import("workflow/step.zig").StepCtx;
+pub const Suspendable = @import("workflow/step.zig").Suspendable;
+pub const Retry = @import("workflow/step.zig").Retry;
+pub const Backoff = @import("workflow/step.zig").Backoff;
+pub const initial = @import("workflow/step.zig").initial;
+pub const otherwise = @import("workflow/step.zig").otherwise;
+pub const step = struct {
+    pub const agent = @import("workflow/step.zig").agentStep;
+    pub const parallel = @import("workflow/step.zig").parallel;
+};
+
 pub const testing = struct {
     const h = @import("testing/harness.zig");
     pub const harness = h.harness;

@@ -189,7 +189,7 @@ const Classify = z.step.agent(TriageAgent, .{
 const FetchOrder = struct {
     pub const Input = Triage;
     pub const Output = ?Order;
-    pub const retry = z.Retry{ .attempts = 3, .backoff = .exponential(200) };
+    pub const retry = z.Retry{ .attempts = 3, .backoff = .{ .exponential = 200 } };
 
     pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !Output {
         const id = in.order_id orelse return null;
@@ -206,10 +206,10 @@ const ApproveRefund = struct {
     /// ...and what you must provide to resume it. Both are typed end to end.
     pub const Resume = struct { approved: bool, approver: []const u8 };
 
-    /// Declared dependencies on earlier data. `z.initial` is the workflow
-    /// input. Naming a step that doesn't run before this one in every path is
-    /// a compile error at `.commit()`.
-    pub const needs = .{ .triage = z.initial };
+    /// Declared dependencies on earlier data. `z.initial(T)` is the workflow
+    /// input (its type is checked at `.commit()`). Naming a step that doesn't
+    /// run before this one in every path is a compile error.
+    pub const needs = .{ .triage = z.initial(Triage) };
 
     pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !z.Suspendable(@This()) {
         const order = in orelse return .{ .done = .{
@@ -279,7 +279,7 @@ const DraftReply = struct {
 const NotifyCustomer = struct {
     pub const Input = Resolution;
     pub const Output = struct { sent: bool };
-    pub const needs = .{ .ticket = z.initial };
+    pub const needs = .{ .ticket = z.initial(Ticket) };
 
     pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !Output {
         std.log.info("notify {s}: {s}", .{ w.needs.ticket.customer_id, in.message });
