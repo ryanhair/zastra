@@ -20,6 +20,34 @@ pub const schema = struct {
 
 pub const Json = @import("schema/json.zig").Json;
 
+const message = @import("message.zig");
+pub const Message = message.Message;
+pub const Block = message.Block;
+pub const Usage = message.Usage;
+pub const FinishReason = message.FinishReason;
+
+pub const catalog = @import("catalog/catalog.zig");
+pub const custom = catalog.custom;
+
+/// The provider layer. Most apps never touch it directly; it's public for
+/// `rt.model(...)`-style raw use, custom transports and tests.
+pub const provider = struct {
+    const p = @import("provider/provider.zig");
+    pub const Impl = p.Impl;
+    pub const Request = p.Request;
+    pub const Prefix = p.Prefix;
+    pub const PrefixParts = p.PrefixParts;
+    pub const ToolDef = p.ToolDef;
+    pub const Event = p.Event;
+    pub const Delta = p.Delta;
+    pub const Diagnostic = p.Diagnostic;
+    pub const Error = p.Error;
+    pub const anthropic = @import("provider/anthropic.zig");
+    pub const openai_compat = @import("provider/openai_compat.zig");
+    pub const http = @import("provider/http.zig");
+    pub const sse = @import("provider/sse.zig");
+};
+
 pub const fmt = struct {
     pub const json = @import("schema/json.zig").fmt;
 };
@@ -41,4 +69,9 @@ test {
     _ = @import("schema/json.zig");
     _ = @import("schema/parse.zig");
     _ = @import("schema/parse_test.zig");
+    _ = @import("message.zig");
+    _ = @import("catalog/catalog.zig");
+    _ = @import("provider/sse.zig");
+    _ = @import("provider/http.zig");
+    _ = @import("provider/provider.zig");
 }

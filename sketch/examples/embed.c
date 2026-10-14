@@ -68,7 +68,7 @@ int main(void) {
     zastra_stream_free(s); /* also cancels the run if it is still going */
 
     /* Typed output, as JSON matching SUPPORT_TRIAGE_SCHEMA. */
-    zastra_result *r = support_agent_generate(app, SUPPORT_AGENT_TRIAGE_AGENT,
+    zastra_result *r = support_agent_generate(app, SUPPORT_AGENT_TRIAGE,
         "My order ORD-1042 arrived smashed!", NULL, &err);
     if (r) printf("\ntriage: %s\n", zastra_result_json(r));
     zastra_result_free(r);

@@ -128,7 +128,8 @@ The full example lives in `sketch/`:
 ### 3.2 Naming conventions
 
 - Tool name: `snake_case(@typeName(T))`, minus the module path. It can be overridden with `pub const name = "..."`.
-- Agent and workflow IDs are snake_case of the type name or the given name string. They are unique within an App, which is checked at comptime.
+- Agent IDs come from the required `.name` in the agent config (D20). Workflow IDs come from the name string in `z.Workflow(Ctx, "name", Input)`. Both are unique within an App, which is checked at comptime.
+- Step IDs: `snake_case(@typeName(T))` for step structs, overridable with `pub const name`; `z.step.agent` steps default to the agent's name (override with `.name`); `z.step.parallel` steps default to `parallel_<key>_<key>...`.
 - Generated C identifiers: `<lib>_agent_<id>`, `SUPPORT_AGENT_<ID>`, and so on (§9).
 
 ---
@@ -944,6 +945,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D15 | `rt.model` argument | **Comptime string.** A runtime string would pull the whole catalog and every provider into every binary. Runtime-chosen models belong to `z.DynamicAgent` (v1.1). |
 | D16 | Step execution guarantee | **At least once.** A crash or resume re-runs the step from the top. Idempotency is the step author's job; `w.run_id` plus the step ID is the recommended key (§6.6). |
 | D17 | Memory for agents called from workflow steps | `thread` = `"<run_id>/<step_id>"`, `resource` = the workflow's `start` option; both can be overridden per call (§6.5). |
+| D20 | Agent IDs | **Required `.name` in `z.Agent` config.** A type returned by a function is named after the call (`zastra.Agent(...)`), not the declaration it is assigned to, so the ID can't be derived from `pub const Support = ...`. Missing `.name` is a compile error that explains this. Mastra also requires agent names. |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | Default: return the error. Open. |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | Default: derived, with override. Open. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | Default: yes, needed for MCP pass-through. |

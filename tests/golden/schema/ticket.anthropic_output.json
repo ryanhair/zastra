@@ -1,0 +1,1 @@
+{"type":"object","properties":{"customer_id":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["customer_id","subject","body"],"additionalProperties":false}

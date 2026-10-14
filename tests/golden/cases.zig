@@ -22,8 +22,8 @@ fn schemaCase(comptime T: type, comptime name: []const u8, comptime d: z.schema.
     };
 }
 
-fn schemaCases(comptime T: type, comptime name: []const u8) [3]Case {
-    return .{ schemaCase(T, name, .canonical), schemaCase(T, name, .anthropic), schemaCase(T, name, .openai) };
+fn schemaCases(comptime T: type, comptime name: []const u8) [4]Case {
+    return .{ schemaCase(T, name, .canonical), schemaCase(T, name, .anthropic), schemaCase(T, name, .anthropic_output), schemaCase(T, name, .openai) };
 }
 
 pub const all = schemaCases(fx.Order, "order") ++

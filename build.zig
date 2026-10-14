@@ -16,6 +16,16 @@ pub fn build(b: *std.Build) void {
     const unit = b.addTest(.{ .root_module = mod });
     test_step.dependOn(&b.addRunArtifact(unit).step);
 
+    // Integration tests (tests/*.zig): providers against cassettes, agents
+    // and workflows against the scripted model.
+    const integration = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/integration.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zastra", .module = mod }},
+    }) });
+    test_step.dependOn(&b.addRunArtifact(integration).step);
+
     // Golden tests: tests/golden/main.zig renders every golden artifact and
     // compares it with the checked-in file. `zig build golden -- --update`
     // rewrites the files instead.
@@ -41,6 +51,20 @@ pub fn build(b: *std.Build) void {
 
     // Compile-fail tests.
     addCompileFailTests(b, test_step);
+
+    // Model catalog regeneration (PLAN.md §5.4).
+    const models_update = b.addExecutable(.{
+        .name = "models-update",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/models-update/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const models_run = b.addRunArtifact(models_update);
+    models_run.setCwd(b.path("."));
+    models_run.has_side_effects = true;
+    b.step("models-update", "Regenerate src/catalog/models.zig from tools/models-update/sources.json").dependOn(&models_run.step);
 }
 
 /// Every `tests/compile_fail/*.zig` must fail to compile, and its stderr must

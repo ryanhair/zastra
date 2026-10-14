@@ -139,6 +139,7 @@ pub const CustomerNotes = struct {
 };
 
 pub const Support = z.Agent(Ctx, .{
+    .name = "support", // agents are returned by a function, so they need a name
     .model = "anthropic/claude-sonnet-4-6",
     .instructions = @embedFile("prompts/support.md"), // prompts ship in the binary
     .tools = .{ LookupOrder, IssueRefund, z.mcp.tools(.docs, .{ .allow = &.{"search_docs"} }) },
@@ -153,6 +154,7 @@ pub const Support = z.Agent(Ctx, .{
 /// The schema goes to the provider's native structured-output mode when it has
 /// one, and falls back to a forced tool call when it doesn't.
 pub const TriageAgent = z.Agent(Ctx, .{
+    .name = "triage",
     .model = "openai/gpt-5-mini",
     .instructions = "Classify the support ticket. Be conservative with urgency.",
     .output = Triage,
@@ -163,6 +165,7 @@ pub const TriageAgent = z.Agent(Ctx, .{
 /// `Support` (which has IssueRefund) there would be a compile error. Approvals
 /// in workflows are modeled as `Suspend`/`Resume` steps (see ApproveRefund).
 pub const ReplyWriter = z.Agent(Ctx, .{
+    .name = "reply_writer",
     .model = "anthropic/claude-sonnet-4-6",
     .instructions = @embedFile("prompts/reply.md"),
     .tools = .{LookupOrder},

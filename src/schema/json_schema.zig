@@ -10,7 +10,24 @@ const errors = @import("../meta/errors.zig");
 const reflect = @import("../meta/reflect.zig");
 const Json = @import("json.zig").Json;
 
-pub const Dialect = enum { canonical, anthropic, openai };
+pub const Dialect = enum {
+    /// The full schema, with every constraint (golden files, docs, the C header).
+    canonical,
+    /// Anthropic tool `input_schema`: full schema, `anyOf` for unions.
+    anthropic,
+    /// Anthropic structured output (`output_config.format`): constrained
+    /// decoding doesn't accept numeric/string/array constraints, so they're
+    /// dropped and enforced client-side by `parse`.
+    anthropic_output,
+    /// OpenAI strict mode (tools and `response_format`): every property
+    /// required, optionals as `anyOf [T, null]`, constraints and `default`
+    /// dropped (enforced client-side).
+    openai,
+
+    fn strict(d: Dialect) bool {
+        return d == .openai or d == .anthropic_output;
+    }
+};
 
 pub fn of(comptime T: type) []const u8 {
     return render(T, .canonical);
@@ -65,6 +82,29 @@ fn where(comptime path: []const u8) []const u8 {
     return path;
 }
 
+/// Does `T` contain `z.Json` anywhere? (OpenAI strict mode can't express it.)
+pub fn containsJson(comptime T: type) bool {
+    return comptime containsJsonImpl(T, &.{});
+}
+
+fn containsJsonImpl(comptime T: type, comptime stack: []const type) bool {
+    if (T == Json) return true;
+    for (stack) |S| if (S == T) return false;
+    const next = stack ++ &[_]type{T};
+    return switch (@typeInfo(T)) {
+        .optional => |o| containsJsonImpl(o.child, next),
+        .pointer => |p| containsJsonImpl(p.child, next),
+        .array => |a| containsJsonImpl(a.child, next),
+        .@"struct" => |s| for (s.fields) |f| {
+            if (containsJsonImpl(f.type, next)) break true;
+        } else false,
+        .@"union" => |u| for (u.fields) |f| {
+            if (containsJsonImpl(f.type, next)) break true;
+        } else false,
+        else => false,
+    };
+}
+
 pub fn isStringType(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .pointer => |p| p.size == .slice and p.child == u8,
@@ -75,7 +115,7 @@ pub fn isStringType(comptime T: type) bool {
 fn node(comptime T: type, comptime d: Dialect, comptime meta: Meta, comptime stack: []const type, comptime path: []const u8) []const u8 {
     comptime {
         const desc = if (meta.description) |s| ",\"description\":" ++ str(s) else "";
-        const default = if (d != .openai) (if (meta.default_json) |j| ",\"default\":" ++ j else "") else "";
+        const default = if (!d.strict()) (if (meta.default_json) |j| ",\"default\":" ++ j else "") else "";
         const tail = desc ++ default;
 
         if (T == Json) return "{" ++ (if (tail.len > 0) tail[1..] else "") ++ "}";
@@ -90,12 +130,13 @@ fn node(comptime T: type, comptime d: Dialect, comptime meta: Meta, comptime sta
                 const lo = if (constraint(meta, "min")) |v| v else std.math.minInt(T);
                 const hi = if (constraint(meta, "max")) |v| v else std.math.maxInt(T);
                 if (info.bits > 64) errors.fail("'{s}' is a {s}; integers wider than 64 bits can't be represented in JSON Schema", .{ path, @typeName(T) });
+                if (d.strict()) return "{\"type\":\"integer\"" ++ tail ++ "}";
                 return "{\"type\":\"integer\",\"minimum\":" ++ num(lo) ++ ",\"maximum\":" ++ num(hi) ++ tail ++ "}";
             },
             .float => {
                 checkConstraints(T, meta, &.{ "min", "max" }, path);
-                const lo = if (constraint(meta, "min")) |v| ",\"minimum\":" ++ num(v) else "";
-                const hi = if (constraint(meta, "max")) |v| ",\"maximum\":" ++ num(v) else "";
+                const lo = if (d.strict()) "" else if (constraint(meta, "min")) |v| ",\"minimum\":" ++ num(v) else "";
+                const hi = if (d.strict()) "" else if (constraint(meta, "max")) |v| ",\"maximum\":" ++ num(v) else "";
                 return "{\"type\":\"number\"" ++ lo ++ hi ++ tail ++ "}";
             },
             .@"enum" => |info| {
@@ -113,9 +154,11 @@ fn node(comptime T: type, comptime d: Dialect, comptime meta: Meta, comptime sta
                 if (p.size == .slice and p.child == u8) {
                     checkConstraints(T, meta, &.{ "min_len", "max_len", "pattern", "one_of" }, path);
                     var extra: []const u8 = "";
-                    if (constraint(meta, "min_len")) |v| extra = extra ++ ",\"minLength\":" ++ num(v);
-                    if (constraint(meta, "max_len")) |v| extra = extra ++ ",\"maxLength\":" ++ num(v);
-                    if (constraint(meta, "pattern")) |v| extra = extra ++ ",\"pattern\":" ++ str(v);
+                    if (!d.strict()) {
+                        if (constraint(meta, "min_len")) |v| extra = extra ++ ",\"minLength\":" ++ num(v);
+                        if (constraint(meta, "max_len")) |v| extra = extra ++ ",\"maxLength\":" ++ num(v);
+                        if (constraint(meta, "pattern")) |v| extra = extra ++ ",\"pattern\":" ++ str(v);
+                    }
                     if (constraint(meta, "one_of")) |v| {
                         var vals: []const u8 = "";
                         for (0..v.len) |i| vals = vals ++ (if (i == 0) "" else ",") ++ str(v[i]);
@@ -126,8 +169,10 @@ fn node(comptime T: type, comptime d: Dialect, comptime meta: Meta, comptime sta
                 if (p.size == .slice) {
                     checkConstraints(T, meta, &.{ "min_items", "max_items" }, path);
                     var extra: []const u8 = "";
-                    if (constraint(meta, "min_items")) |v| extra = extra ++ ",\"minItems\":" ++ num(v);
-                    if (constraint(meta, "max_items")) |v| extra = extra ++ ",\"maxItems\":" ++ num(v);
+                    if (!d.strict()) {
+                        if (constraint(meta, "min_items")) |v| extra = extra ++ ",\"minItems\":" ++ num(v);
+                        if (constraint(meta, "max_items")) |v| extra = extra ++ ",\"maxItems\":" ++ num(v);
+                    }
                     return "{\"type\":\"array\",\"items\":" ++ node(p.child, d, .{}, stack, path ++ "[]") ++ extra ++ tail ++ "}";
                 }
                 if (@typeInfo(p.child) == .@"fn") errors.fail("'{s}' is a function pointer; schema types describe data, not behavior", .{path});
@@ -135,8 +180,8 @@ fn node(comptime T: type, comptime d: Dialect, comptime meta: Meta, comptime sta
             },
             .array => |a| {
                 checkConstraints(T, meta, &.{}, path);
-                return "{\"type\":\"array\",\"items\":" ++ node(a.child, d, .{}, stack, path ++ "[]") ++
-                    ",\"minItems\":" ++ num(a.len) ++ ",\"maxItems\":" ++ num(a.len) ++ tail ++ "}";
+                const bounds = if (d.strict()) "" else ",\"minItems\":" ++ num(a.len) ++ ",\"maxItems\":" ++ num(a.len);
+                return "{\"type\":\"array\",\"items\":" ++ node(a.child, d, .{}, stack, path ++ "[]") ++ bounds ++ tail ++ "}";
             },
             .@"struct" => |s| {
                 if (s.is_tuple) errors.fail("'{s}' is a tuple; schema types must be structs with named fields", .{path});
@@ -324,8 +369,8 @@ test "struct with docs, constraints, optional and default" {
     );
     try std.testing.expectEqualStrings(
         "{\"type\":\"object\",\"properties\":{" ++
-            "\"urgency\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5,\"description\":\"1-5\"}," ++
-            "\"note\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":10},{\"type\":\"null\"}]}," ++
+            "\"urgency\":{\"type\":\"integer\",\"description\":\"1-5\"}," ++
+            "\"note\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}," ++
             "\"mode\":{\"type\":\"string\",\"enum\":[\"fast\",\"slow\"]}" ++
             "},\"required\":[\"urgency\",\"note\",\"mode\"],\"additionalProperties\":false}",
         comptime render(T, .openai),
