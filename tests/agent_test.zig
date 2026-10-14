@@ -373,3 +373,27 @@ test "D8: tools that spend money require approval by default" {
     h.script(Biller, &.{.tool(Charge, .{ .cents = 100 })});
     try t.expectError(error.ApprovalRequired, h.agent(Biller).generate("charge", .{}));
 }
+
+test "D30: thinking blocks from earlier runs aren't replayed" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var replay: z.provider.http.Replay = .init(t.allocator, &.{
+        .{ .url_suffix = "/v1/messages", .body = @embedFile("cassettes/anthropic_tool.sse") },
+        .{ .url_suffix = "/v1/messages", .body = @embedFile("cassettes/anthropic_text.sse") },
+        .{ .url_suffix = "/v1/messages", .body = @embedFile("cassettes/anthropic_text.sse") },
+    });
+    defer replay.deinit();
+    var rt = try App.init(t.allocator, t.io, .{ .ctx = &ctx, .testing = .{ .replay = &replay } });
+    defer rt.deinit();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    _ = try rt.agent(Support).generate(arena.allocator(), "Where is ORD-1042?", .{ .thread = "th" });
+    // Within the run, the thinking block went back unchanged.
+    try t.expect(std.mem.indexOf(u8, replay.requests.items[1], "\"signature\":\"EqQBCgIYAhIM\"") != null);
+    _ = try rt.agent(Support).generate(arena.allocator(), "Thanks", .{ .thread = "th" });
+    // In the next run, history is there but its thinking blocks aren't.
+    const third = replay.requests.items[2];
+    try t.expect(std.mem.indexOf(u8, third, "Let me check.") != null);
+    try t.expect(std.mem.indexOf(u8, third, "\"type\":\"thinking\"") == null);
+    try t.expect(std.mem.indexOf(u8, third, "redacted_thinking") == null);
+}

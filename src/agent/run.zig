@@ -348,7 +348,12 @@ pub fn Stream(comptime A: type) type {
                 // the first plain user turn.
                 var first: usize = 0;
                 while (first < loaded.items.len and !isPlainUser(loaded.items[first])) first += 1;
-                try s.messages.appendSlice(s.arena, loaded.items[first..]);
+                // Thinking blocks are bound to the exact prefix they were
+                // produced under. Across runs that prefix changes (history
+                // window, working-memory suffix), so replaying them would be
+                // rejected; drop them from loaded history. Within a run they
+                // are passed back unchanged (PLAN.md D30).
+                for (loaded.items[first..]) |m| try s.messages.append(s.arena, try withoutThinking(s.arena, m));
             };
             if (A.has_working_memory) {
                 if (s.opts.resource) |res| if (s.st.storage) |store| {
@@ -373,6 +378,21 @@ pub fn Stream(comptime A: type) type {
             }
             s.new_from = s.messages.items.len;
             try s.messages.appendSlice(s.arena, s.input);
+        }
+
+        fn withoutThinking(arena: Allocator, m: Message) Allocator.Error!Message {
+            if (m.role != .assistant) return m;
+            const bs = switch (m.content) {
+                .text => return m,
+                .blocks => |b| b,
+            };
+            var out: std.ArrayList(msg.Block) = .empty;
+            for (bs) |b| switch (b) {
+                .reasoning => {},
+                .provider_opaque => |o| if (std.mem.indexOf(u8, o.json, "\"type\":\"redacted_thinking\"") == null) try out.append(arena, b),
+                else => try out.append(arena, b),
+            };
+            return .{ .role = .assistant, .content = .{ .blocks = out.items } };
         }
 
         fn isPlainUser(m: Message) bool {
