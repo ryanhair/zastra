@@ -288,6 +288,9 @@ pub fn Stream(comptime A: type) type {
         /// The run has a row in storage (it was suspended at some point), so
         /// its final status is written there too.
         persisted: bool = false,
+        /// The request prefix, fixed for the whole run (MCP tool lists
+        /// refreshed later apply to the next run).
+        prefix: provider.Prefix = A.prefix,
         created_at: i64 = 0,
 
         const tag_headers = [_][2][]const u8{.{ "x-zastra-agent", A.id }};
@@ -475,6 +478,7 @@ pub fn Stream(comptime A: type) type {
                 c.deny_reason = saved.deny_reason;
                 if (c.approval == .pending) s.pending += 1;
             }
+            try s.loadPrefix();
             s.step_span = st.tracer.begin(.agent_step, A.id, s.trace_id, &s.run_span);
             s.step_span.attr("step", s.step);
             s.step_span.attr("resumed", true);
@@ -634,7 +638,21 @@ pub fn Stream(comptime A: type) type {
             try s.queue.append(s.arena, e);
         }
 
+        /// Take the MCP-completed prefix for this run.
+        fn loadPrefix(s: *Self) Error!void {
+            if (A.mcp_tools.len == 0) return;
+            const vt = s.st.mcp_vtable orelse return error.McpFailed;
+            s.prefix = vt.prefix(s.st.mcp.?, A.id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    s.diag.print(0, "agent '{s}': MCP tools: {t}", .{ A.id, err });
+                    return error.McpFailed;
+                },
+            };
+        }
+
         fn start(s: *Self) Error!void {
+            try s.loadPrefix();
             // Memory: history, then working memory (§6.5).
             if (A.history_messages > 0) if (s.opts.thread) |thread| if (s.st.storage) |store| {
                 const rows = store.loadHistory(s.arena, thread, A.history_messages) catch |err| {
@@ -723,7 +741,7 @@ pub fn Stream(comptime A: type) type {
             s.model_span.attr("model", comptime spec.fullName());
             s.model_span.attr("prefix_hash", A.prefix_hash);
 
-            const prefix = if (A.mcp_tools.len > 0) (s.st.prefixes.get(A.id) orelse A.prefix) else A.prefix;
+            const prefix = s.prefix;
             const req: provider.Request = .{
                 .base_url = s.st.baseUrl(spec),
                 .api_key = key,

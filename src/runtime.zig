@@ -23,9 +23,6 @@ pub const State = struct {
     /// MCP client manager (§6.7), when the App declares servers.
     mcp: ?*anyopaque = null,
     mcp_vtable: ?*const McpVTable = null,
-    /// Prefixes completed at init with runtime-discovered (MCP) tools, keyed
-    /// by agent id.
-    prefixes: std.StringHashMapUnmanaged(provider.Prefix) = .empty,
     /// Overrides the wall clock (test harness).
     clock_ms: ?*const fn () i64 = null,
     diag_mutex: Io.Mutex = .init,
@@ -78,8 +75,11 @@ pub const State = struct {
 
 /// What agents need from the MCP manager, type-erased.
 pub const McpVTable = struct {
-    /// Tool definitions for `server` filtered by `allow`, as provider JSON.
+    /// Call `tool` on `server` with JSON arguments.
     call: *const fn (ptr: *anyopaque, arena: Allocator, server: []const u8, tool: []const u8, args_json: []const u8) anyerror!McpResult,
+    /// The request prefix (with MCP tools) for a run of `agent_id` starting
+    /// now; applies pending tool list refreshes first.
+    prefix: *const fn (ptr: *anyopaque, agent_id: []const u8) anyerror!provider.Prefix,
 };
 
 pub const McpResult = struct { content: []const u8, is_error: bool };

@@ -96,6 +96,17 @@ pub fn App(comptime cfg: anytype) type {
             };
             if (!seen) env = env ++ &[_][]const u8{k};
         };
+        // ...and the MCP servers' bearer tokens.
+        for (mcp_transports) |t| switch (t) {
+            .http => |d| if (d.bearer_env) |k| {
+                var seen = false;
+                for (env) |e| if (std.mem.eql(u8, e, k)) {
+                    seen = true;
+                };
+                if (!seen) env = env ++ &[_][]const u8{k};
+            },
+            .stdio => {},
+        };
 
         const agents_final = agent_list;
         const workflows_final = workflow_list;
@@ -112,6 +123,8 @@ pub fn App(comptime cfg: anytype) type {
             pub const required_env = env_final;
             pub const mcp_servers = mcp_names_final;
             pub const mcp_server_transports = mcp_transports_final;
+            /// The MCP manager, with only the declared transports compiled in.
+            pub const McpManager = @import("mcp/manager.zig").Manager(@import("mcp/manager.zig").kindsOf(mcp_transports_final));
 
             pub const InitOptions = struct {
                 ctx: *Ctx,
@@ -129,6 +142,7 @@ pub fn App(comptime cfg: anytype) type {
                     /// Save response bodies here, to build test cassettes.
                     record_dir: ?[]const u8 = null,
                 } = .{},
+                mcp: @import("mcp/manager.zig").Options = .{},
                 /// Test harness hooks. Not for production use.
                 testing: ?Testing = null,
 
@@ -208,25 +222,24 @@ pub fn App(comptime cfg: anytype) type {
                     lastInitDiag().* = st.diag;
                     return error.StorageFailed;
                 };
+                errdefer backend.close();
                 st.storage = backend.storageIface();
 
                 if (mcp_servers.len > 0) {
-                    const Mcp = @import("mcp/manager.zig").Manager;
-                    const m = Mcp.start(gpa, io, st, mcp_servers, mcp_server_transports) catch |err| {
+                    const Mcp = McpManager;
+                    const m = Mcp.start(gpa, io, st, mcp_servers, mcp_server_transports, opts.mcp) catch |err| {
                         lastInitDiag().* = st.diag;
-                        st.http.deinit();
-                        backend.close();
                         return err;
                     };
                     st.mcp = m;
                     st.mcp_vtable = &Mcp.vtable;
                     inline for (agents) |A| if (A.mcp_tools.len > 0) {
-                        const p = m.completePrefix(A) catch |err| {
-                            st.diag.print(0, "agent '{s}': MCP tools: {t}", .{ A.id, err });
+                        m.register(A) catch |err| {
+                            if (err != error.McpUnknownTool) st.diag.print(0, "agent '{s}': MCP tools: {t}", .{ A.id, err });
                             lastInitDiag().* = st.diag;
+                            m.stop();
                             return error.McpFailed;
                         };
-                        try st.prefixes.put(gpa, A.id, p);
                     };
                 }
                 return .{ .st = st, .backend = backend };
@@ -270,12 +283,8 @@ fn RuntimeOf(comptime AppT: type) type {
         pub fn deinit(rt: *Self) void {
             const gpa = rt.st.gpa;
             if (AppT.mcp_servers.len > 0) if (rt.st.mcp) |m| {
-                const Mcp = @import("mcp/manager.zig").Manager;
-                @as(*Mcp, @ptrCast(@alignCast(m))).stop();
+                @as(*AppT.McpManager, @ptrCast(@alignCast(m))).stop();
             };
-            var it = rt.st.prefixes.valueIterator();
-            while (it.next()) |p| gpa.free(p.json);
-            rt.st.prefixes.deinit(gpa);
             rt.backend.close();
             gpa.destroy(rt.backend);
             rt.st.http.deinit();

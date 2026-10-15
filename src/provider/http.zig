@@ -153,16 +153,31 @@ pub const Http = struct {
         h.client.now = now;
     }
 
+    /// Per-request overrides of `Options`.
+    pub const RequestOptions = struct {
+        method: std.http.Method = .POST,
+        /// Overrides `Options.idle_timeout_ms` (0 disables it, e.g. for
+        /// long-lived notification streams).
+        idle_timeout_ms: ?u32 = null,
+        max_retries: ?u8 = null,
+    };
+
     /// POST `body` to `url`. Retries (before any response body is read) on
     /// connection failures, 408, 409, 429 and 5xx, honoring `Retry-After`.
     /// The returned response may have any status; the caller checks it.
     pub fn post(h: *Http, url: []const u8, headers: []const std.http.Header, body: []const u8) Error!*Response {
+        return h.request(url, headers, body, .{});
+    }
+
+    /// Like `post`, with a method and per-request options.
+    pub fn request(h: *Http, url: []const u8, headers: []const std.http.Header, body: []const u8, ro: RequestOptions) Error!*Response {
         if (h.replay) |r| return h.postReplay(r, url, headers, body);
 
+        const max_retries = ro.max_retries orelse h.opts.max_retries;
         var tries: u8 = 0;
         while (true) : (tries += 1) {
-            const last = tries >= h.opts.max_retries;
-            const res = h.attemptOnce(url, headers, body) catch |err| switch (err) {
+            const last = tries >= max_retries;
+            const res = h.attemptOnce(url, headers, body, ro) catch |err| switch (err) {
                 error.Canceled, error.OutOfMemory, error.InvalidUrl => |e| return e,
                 else => |e| {
                     if (last) return e;
@@ -214,16 +229,16 @@ pub const Http = struct {
     }
 
     /// One attempt, bounded by `timeout_ms` until headers arrive.
-    fn attemptOnce(h: *Http, url: []const u8, headers: []const std.http.Header, body: []const u8) Error!*Response {
-        if (h.opts.timeout_ms == 0) return h.attemptInner(url, headers, body);
+    fn attemptOnce(h: *Http, url: []const u8, headers: []const std.http.Header, body: []const u8, ro: RequestOptions) Error!*Response {
+        if (h.opts.timeout_ms == 0) return h.attemptInner(url, headers, body, ro);
         const Sel = Io.Select(union(enum) {
             done: Error!*Response,
             timeout: Io.Cancelable!void,
         });
         var buf: [2]Sel.Union = undefined;
         var sel: Sel = .init(h.io, &buf);
-        sel.concurrent(.done, attemptInner, .{ h, url, headers, body }) catch
-            return h.attemptInner(url, headers, body); // no concurrency available: no timeout
+        sel.concurrent(.done, attemptInner, .{ h, url, headers, body, ro }) catch
+            return h.attemptInner(url, headers, body, ro); // no concurrency available: no timeout
         sel.concurrent(.timeout, sleepMs, .{ h.io, h.opts.timeout_ms }) catch {
             // No unit of concurrency for the timer: wait for the request alone.
             const u = sel.await() catch {
@@ -261,12 +276,12 @@ pub const Http = struct {
         try io.sleep(.fromMilliseconds(ms), .awake);
     }
 
-    fn attemptInner(h: *Http, url: []const u8, headers: []const std.http.Header, body: []const u8) Error!*Response {
+    fn attemptInner(h: *Http, url: []const u8, headers: []const std.http.Header, body: []const u8, ro: RequestOptions) Error!*Response {
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
         const res = try h.gpa.create(Response);
         errdefer h.gpa.destroy(res);
         res.* = .{ .http = h, .live = undefined };
-        res.live.req = h.client.request(.POST, uri, .{
+        res.live.req = h.client.request(ro.method, uri, .{
             .headers = .{
                 .content_type = .{ .override = "application/json" },
                 .accept_encoding = .omit,
@@ -277,18 +292,25 @@ pub const Http = struct {
             .redirect_behavior = .not_allowed,
         }) catch |err| return mapErr(err);
         errdefer res.live.req.deinit();
-        res.live.req.transfer_encoding = .{ .content_length = body.len };
-        var bw = res.live.req.sendBodyUnflushed(&.{}) catch |err| return mapErr(err);
-        bw.writer.writeAll(body) catch return error.ConnectionFailed;
-        bw.end() catch return error.ConnectionFailed;
-        res.live.req.connection.?.flush() catch return error.ConnectionFailed;
+        if (ro.method.requestHasBody()) {
+            res.live.req.transfer_encoding = .{ .content_length = body.len };
+            var bw = res.live.req.sendBodyUnflushed(&.{}) catch |err| return mapErr(err);
+            bw.writer.writeAll(body) catch return error.ConnectionFailed;
+            bw.end() catch return error.ConnectionFailed;
+            res.live.req.connection.?.flush() catch return error.ConnectionFailed;
+        } else {
+            res.live.req.sendBodiless() catch |err| return mapErr(err);
+        }
         const resp = res.live.req.receiveHead(&res.live.redirect_buf) catch |err| return mapErr(err);
         res.status = @intFromEnum(resp.head.status);
         res.retry_after_ms = retryAfter(resp.head);
+        res.headers = try copyHeaders(h.gpa, resp.head);
+        res.owns_headers = true;
         res.live.response = resp;
         res.reader = res.live.response.reader(&res.live.transfer_buf);
-        if (h.opts.idle_timeout_ms != 0) {
-            res.live.idle = .init(h.io, res.reader, h.opts.idle_timeout_ms, &res.live.idle_buf);
+        const idle_ms = ro.idle_timeout_ms orelse h.opts.idle_timeout_ms;
+        if (idle_ms != 0) {
+            res.live.idle = .init(h.io, res.reader, idle_ms, &res.live.idle_buf);
             res.reader = &res.live.idle.interface;
         }
         return res;
@@ -313,7 +335,7 @@ pub const Http = struct {
                 return error.ConnectionFailed;
             };
             const res = try h.gpa.create(Response);
-            res.* = .{ .http = h, .status = ix.status, .replayed = true, .live = undefined };
+            res.* = .{ .http = h, .status = ix.status, .replayed = true, .live = undefined, .headers = ix.headers };
             res.fixed = .fixed(ix.body);
             res.reader = &res.fixed;
             return res;
@@ -329,12 +351,39 @@ pub const Http = struct {
             return error.ConnectionFailed;
         }
         const res = try h.gpa.create(Response);
-        res.* = .{ .http = h, .status = ix.status, .replayed = true, .live = undefined };
+        res.* = .{ .http = h, .status = ix.status, .replayed = true, .live = undefined, .headers = ix.headers };
         res.fixed = .fixed(ix.body);
         res.reader = &res.fixed;
         return res;
     }
 };
+
+/// Response headers, copied out of the connection buffer (which later body
+/// reads reuse).
+fn copyHeaders(gpa: Allocator, head: std.http.Client.Response.Head) Allocator.Error![]const std.http.Header {
+    var n: usize = 0;
+    var size: usize = 0;
+    var it = head.iterateHeaders();
+    while (it.next()) |hd| {
+        n += 1;
+        size += hd.name.len + hd.value.len;
+    }
+    const out = try gpa.alloc(std.http.Header, n);
+    errdefer gpa.free(out);
+    const bytes = try gpa.alloc(u8, size);
+    var at: usize = 0;
+    it = head.iterateHeaders();
+    var i: usize = 0;
+    while (it.next()) |hd| : (i += 1) {
+        @memcpy(bytes[at..][0..hd.name.len], hd.name);
+        const name = bytes[at..][0..hd.name.len];
+        at += hd.name.len;
+        @memcpy(bytes[at..][0..hd.value.len], hd.value);
+        out[i] = .{ .name = name, .value = bytes[at..][0..hd.value.len] };
+        at += hd.value.len;
+    }
+    return out;
+}
 
 fn retryAfter(head: std.http.Client.Response.Head) ?u64 {
     var it = head.iterateHeaders();
@@ -360,7 +409,16 @@ pub const Response = struct {
     fixed: Io.Reader = undefined,
     /// Body captured by cassette recording (owned).
     recorded: ?[]u8 = null,
+    /// Response headers.
+    headers: []const std.http.Header = &.{},
+    owns_headers: bool = false,
     live: Live,
+
+    /// The first response header named `name` (case-insensitive).
+    pub fn header(r: *const Response, name: []const u8) ?[]const u8 {
+        for (r.headers) |hd| if (std.ascii.eqlIgnoreCase(hd.name, name)) return hd.value;
+        return null;
+    }
 
     const Live = struct {
         req: std.http.Client.Request,
@@ -405,6 +463,12 @@ pub const Response = struct {
     pub fn close(r: *Response) void {
         const gpa = r.http.gpa;
         if (r.recorded) |b| gpa.free(b);
+        if (r.owns_headers) {
+            var size: usize = 0;
+            for (r.headers) |hd| size += hd.name.len + hd.value.len;
+            if (r.headers.len > 0) gpa.free(@as([*]const u8, r.headers[0].name.ptr)[0..size]);
+            gpa.free(r.headers);
+        }
         if (!r.replayed) r.live.req.deinit();
         gpa.destroy(r);
     }

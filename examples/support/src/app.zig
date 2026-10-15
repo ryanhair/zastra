@@ -150,7 +150,7 @@ pub const Support = z.Agent(Ctx, .{
     // is a compile error. `.show_reasoning` adds `.reasoning_delta` events.
     .reasoning = .on,
     .show_reasoning = true,
-    .tools = .{ LookupOrder, IssueRefund, notify.SendEmail, z.mcp.tools(.docs, .{ .allow = &.{"search_docs"} }) },
+    .tools = .{ LookupOrder, IssueRefund, notify.SendEmail, z.mcp.tools(.docs, .{ .allow = &.{"search_docs"} }), z.mcp.tools(.status, .{}) },
     .memory = .{
         .history = .{ .last_messages = 30 },
         .working = CustomerNotes,
@@ -325,6 +325,9 @@ pub const App = z.App(.{
     .mcp = .{
         // Built by this example's build.zig; run the app from examples/support.
         .docs = z.mcp.stdio(&.{"zig-out/bin/docs-mcp-server"}),
+        // Streamable HTTP, protocol 2026-07-28. `url_env` overrides the URL
+        // per deploy; `optional` starts the App without its tools if it's down.
+        .status = z.mcp.http("http://127.0.0.1:8931/mcp", .{ .url_env = "STATUS_MCP_URL", .optional = true }),
     },
 });
 
@@ -392,6 +395,34 @@ test "large refunds pause for approval and resume after a restart" {
     const done = try h.workflow(HandleTicket).resumeStep(z.step.agentOf(Refunder), run_id, .{ .approve = &.{req_id} });
     try std.testing.expect(done.completed.sent);
     try std.testing.expectEqual(1, db.refundCount());
+}
+
+test "the HTTP status server's tools show up when it's running" {
+    var db = OrderDb.fake(&.{});
+    defer db.close();
+    var mailer: notify.Mailer = .{};
+    var ctx: Ctx = .{ .db = &db, .mailer = &mailer };
+
+    // Start the 2026-07-28 Streamable HTTP server on a free port.
+    const io = std.testing.io;
+    var child = try std.process.spawn(io, .{ .argv = &.{ "zig-out/bin/status-mcp-server", "0" }, .stdout = .pipe });
+    defer child.kill(io);
+    var buf: [256]u8 = undefined;
+    var out = child.stdout.?.readerStreaming(io, &buf);
+    const url = (try out.interface.takeDelimiter('\n')).?;
+    var env: std.process.Environ.Map = .init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("STATUS_MCP_URL", url);
+
+    var h = try z.testing.harness(App, .{ .ctx = &ctx, .env = &env });
+    defer h.deinit();
+    h.script(Support, &.{
+        .tools(&.{.{ .mcp = .{ .server = "status", .tool = "service_status", .args_json = "{\"service\":\"shipping\"}" } }}),
+        .text("Shipping is running 1-2 days late in the EU."),
+    });
+    const r = try h.agent(Support).generate("Where's my parcel?", .{ .include_messages = true });
+    const result = r.completed.messages[2].content.blocks[0].tool_result;
+    try std.testing.expectEqualStrings("shipping: degraded: carrier delays in the EU, 1-2 extra days", result.content);
 }
 
 pub const OrderDb = @import("order_db.zig").OrderDb;

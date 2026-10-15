@@ -7,6 +7,7 @@
 //!     const r = try h.agent(TriageAgent).generate("...", .{});
 
 const std = @import("std");
+const builtin = @import("builtin");
 const http = @import("../provider/http.zig");
 const scripted = @import("scripted.zig");
 const run = @import("../agent/run.zig");
@@ -23,11 +24,12 @@ pub fn Options(comptime Ctx: type) type {
         /// For `.storage = .sqlite` Apps: a file path lets a second harness
         /// reopen the same database (a "restart").
         storage_path: []const u8 = ":memory:",
+        mcp: @import("../mcp/manager.zig").Options = .{},
     };
 }
 
 pub fn harness(comptime AppT: type, opts: Options(AppT.Context)) !*Harness(AppT) {
-    const gpa = opts.gpa orelse std.testing.allocator;
+    const gpa = opts.gpa orelse if (builtin.is_test) std.testing.allocator else @panic("zastra harness: pass `.gpa` outside tests");
     const h = try gpa.create(Harness(AppT));
     errdefer gpa.destroy(h);
     h.* = .{
@@ -37,10 +39,11 @@ pub fn harness(comptime AppT: type, opts: Options(AppT.Context)) !*Harness(AppT)
         .rt = undefined,
     };
     h.replay.responder = .{ .ctx = h, .respond = Harness(AppT).respond };
-    h.rt = try AppT.init(gpa, opts.io orelse std.testing.io, .{
+    h.rt = try AppT.init(gpa, opts.io orelse if (builtin.is_test) std.testing.io else @panic("zastra harness: pass `.io` outside tests"), .{
         .ctx = opts.ctx,
         .env = opts.env,
         .storage_path = opts.storage_path,
+        .mcp = opts.mcp,
         .testing = .{ .replay = &h.replay, .clock_ms = fakeClock },
     });
     return h;

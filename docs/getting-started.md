@@ -167,6 +167,34 @@ pub const Planner = z.Agent(Ctx, .{
 
 On OpenAI models, reasoning is an effort level: `.reasoning = .on` uses your `.effort` (or `medium`), `.off` sends effort `none` on models that accept it, and `.show_reasoning` streams the summaries OpenAI writes of its reasoning. Some models (gpt-5.1 to gpt-5.4) don't reason unless asked; `.effort` or `.reasoning = .on` turns it on. Within a run, reasoning is passed back between tool steps so the model doesn't lose its train of thought.
 
+### MCP servers
+
+Declare servers on the App and hand their tools to agents:
+
+```zig
+pub const Support = z.Agent(Ctx, .{
+    .name = "support",
+    .model = "anthropic/claude-sonnet-5-5",
+    .tools = .{ LookupOrder, z.mcp.tools(.docs, .{ .allow = &.{"search_docs"} }), z.mcp.tools(.linear, .{}) },
+});
+
+pub const App = z.App(.{
+    .ctx = Ctx,
+    .agents = .{Support},
+    .mcp = .{
+        .docs = z.mcp.stdio(&.{"docs-mcp-server"}),
+        .linear = z.mcp.http("https://mcp.linear.app/mcp", .{
+            .bearer_env = "LINEAR_MCP_TOKEN", // Authorization: Bearer <value>
+            .headers = &.{.{ "X-Team", "acme" }},
+            .url_env = "LINEAR_MCP_URL", // overrides the URL when set
+            .optional = true, // start without these tools if the server is down
+        }),
+    },
+});
+```
+
+zastra speaks MCP 2026-07-28 and falls back to `initialize`-based servers (2025-11-25 and earlier) on its own: on stdio it probes with `server/discover`; over HTTP it reads the first error response. The model sees tools as `<server>__<tool>`, sorted by name, and their arguments are validated against the server's schema before the call. When a server says its tools changed, or their `ttlMs` runs out, the new list applies from the next run; a running agent keeps its list. zastra declares no client capabilities (sampling, elicitation, roots): a server that asks for one gets a tool error the model can read. OAuth isn't supported yet; pass a token with `.bearer_env`.
+
 ## 6. Workflows
 
 ```zig

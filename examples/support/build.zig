@@ -59,6 +59,19 @@ pub fn build(b: *std.Build) void {
     const install_docs = b.addInstallArtifact(docs, .{});
     b.getInstallStep().dependOn(&install_docs.step);
 
+    // The service-status MCP server (`.mcp.status`, Streamable HTTP). The
+    // App treats it as optional; run `zig-out/bin/status-mcp-server` to add it.
+    const status = b.addExecutable(.{
+        .name = "status-mcp-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/status_server.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const install_status = b.addInstallArtifact(status, .{});
+    b.getInstallStep().dependOn(&install_status.step);
+
     // 2. Dev CLI.
     const dev = z.addDev(b, .{ .app = app_mod, .zastra = zastra_dep });
     dev.run.step.dependOn(&install_docs.step);
@@ -87,5 +100,6 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = app_mod });
     const run_tests = b.addRunArtifact(tests);
     run_tests.step.dependOn(&install_docs.step);
+    run_tests.step.dependOn(&install_status.step);
     b.step("test", "Run tests").dependOn(&run_tests.step);
 }

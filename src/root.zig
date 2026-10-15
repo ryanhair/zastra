@@ -38,6 +38,7 @@ pub const ToolCtx = @import("context.zig").ToolCtx;
 pub const Partial = @import("schema/partial.zig").Partial;
 pub const mcp = struct {
     pub const stdio = @import("mcp/mcp.zig").stdio;
+    pub const http = @import("mcp/mcp.zig").http;
     pub const tools = @import("mcp/mcp.zig").tools;
 };
 pub const prompt = struct {
@@ -149,4 +150,6 @@ test {
     _ = @import("schema/comptime_json.zig");
     _ = @import("storage/memory_store.zig");
     _ = @import("storage/sqlite.zig");
+    _ = @import("mcp/protocol.zig");
+    _ = @import("mcp/validate.zig");
 }

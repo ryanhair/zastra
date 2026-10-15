@@ -701,6 +701,8 @@ Retries:
 
 ### 6.7 MCP client (`mcp/`)
 
+(v1 is described below: stdio, `initialize`, fixed tool lists. v1.1 adds the 2026-07-28 protocol, Streamable HTTP and tool list refresh; see §17.5.)
+
 - Transport: stdio child process in v1. Streamable HTTP is v1.1.
 - Protocol: JSON-RPC 2.0, `initialize`, `tools/list`, `tools/call`, and `notifications/tools/list_changed` (logged; tool lists are fixed at App init in v1).
 - MCP tool schemas arrive at runtime, so MCP tools are **runtime-typed**:
@@ -966,7 +968,6 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D31 | Saved approvals API | An agent with approval-gated tools returns `union { completed, suspended }` from `generate`; resume by id with `resumeRun` / `resumeStream`, like workflows. Replaces `error.ApprovalRequired`. Agents without gated tools are unchanged. (§17.3) |
 | D32 | Agent run storage | One `runs` table with `kind` (migration 0002); atomic `claimRun` compare-and-set before every resume, for agents and workflows (fixes a v1 double-resume race). (§17.3) |
 | D33 | Partial approval decisions | Allowed: decided ids are saved, the run stays suspended with the rest. (§17.3) |
-| D41 | Suspending a live stream | `s.suspendRun()`, not `s.suspend()`: `suspend` is still a Zig keyword. The C ABI matches with `zastra_stream_suspend`, and adds `<lib>_agent_cancel`; every agent result JSON now has `"status"`. (§17.3) |
 | D34 | Gated agents in workflow steps | `z.step.agent` with a gated agent becomes suspendable automatically (`z.Approvals(A)` / `z.Decisions(A)`); custom steps use `w.agent(A).run`, which resumes the saved agent run on replay. Parallel branches still can't suspend. Supersedes D18's compile error. (§17.4) |
 | D35 | OpenAI API | Catalog `openai/*` models use the Responses API, with `store: false`; `openai_compat` (Chat Completions) remains for third-party servers. (§17.2) |
 | D36 | OpenAI reasoning items | Round-tripped within a run as opaque blocks; dropped from history loaded across runs, like D30, until live evidence says otherwise. (§17.2) |
@@ -974,6 +975,8 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D38 | MCP client era and auth | Dual-era: 2026-07-28 first, falling back to 2025-11-25 `initialize` on stdio and HTTP; HTTP+SSE (2024-11-05) unsupported. No sampling/elicitation/roots (`InputRequiredResult` becomes a tool error). HTTP auth is static headers and a bearer token from the env; OAuth deferred. (§17.5) |
 | D39 | MCP tool list refresh | Via `subscriptions/listen`, legacy `list_changed` notifications, or `ttlMs`; applied at the next run start, tools sorted for stable prefixes. (§17.5) |
 | D40 | MCP schema validation | Adds local `$ref`, `allOf`, conditionals and `prefixItems` with depth/size bounds; unsupported schemas skip validation with a warning instead of hiding the tool. (§17.5) |
+| D41 | Suspending a live stream | `s.suspendRun()`, not `s.suspend()`: `suspend` is still a Zig keyword. The C ABI matches with `zastra_stream_suspend`, and adds `<lib>_agent_cancel`; every agent result JSON now has `"status"`. (§17.3) |
+| D42 | Optional MCP servers and URL overrides | `z.mcp.http(..., .{ .optional = true })` starts the App without an unreachable server's tools (logged); `.url_env` replaces the URL when that variable is set. (§17.5) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
@@ -1369,6 +1372,18 @@ It has bounds: depth 64 and 10k nodes visited per validation. Unknown keywords s
 - All of the above pass.
 - The support example adds an HTTP server.
 - A live check against one public modern MCP server and one legacy server.
+
+**Implemented (N5, 2026-10-15):**
+- `src/mcp/protocol.zig` (framing for both eras, reply classification, header value encoding with the Base64 sentinel, `x-mcp-header` validation and extraction), `stdio.zig` (a background reader routes replies by id; `server/discover` probe with a 5 s timeout, `App.init(.{ .mcp = .{ .probe_timeout_ms } })`), `streamable.zig` (modern POSTs with mirrored headers, JSON or SSE replies, a `subscriptions/listen` task; legacy `initialize`, `Mcp-Session-Id` and DELETE), and the manager, generic over the declared transports.
+- `z.mcp.http(url, .{ .bearer_env, .headers, .url_env, .optional })`. `url_env` overrides the URL at init (per deploy; tests use it for random ports). `optional` (D42) starts the App without an unreachable server's tools, so the support example and its CI don't need the server running. Bearer env vars join the App's required environment.
+- `InputRequiredResult`: with `inputRequests`, a tool error naming the requested methods (and a log line); with only `requestState`, retried up to three times. `HeaderMismatch` re-lists the server's tools at the next run. Unrecognized `resultType` is an error; a missing one means `complete`.
+- Refresh (D39): the manager rebuilds an agent's prefix only when a server's tool generation changed; runs take their prefix at start (`Stream.prefix`), so a run keeps its list. Old prefixes are freed at deinit.
+- Validator (D40): local `$ref`/`$defs`/`definitions`, `allOf`, `if`/`then`/`else`, `prefixItems`, `false` schemas; depth 64 and 10k nodes, past which arguments are accepted; `supported()` skips validation (with a warning) for remote `$ref` or `$dynamicRef`.
+- The HTTP client gained response headers, other methods (DELETE) and per-request idle timeout and retries. Fixed on the way: a double free of the HTTP client when `App.init` failed after MCP startup; the harness now works outside tests (it only falls back to `std.testing` there).
+- Size: MCP HTTP code is absent from stdio-only Apps (checked in the `full` binary). `full` is 1,594,200 B (+29 KB, the stdio reader, protocol and validator).
+- Tests: the fake stdio server gained `--modern` and `--silent-probe`; `tests/fake_mcp_http.zig` is an in-process HTTP server (modern, legacy sessions, 401). Covered: era detection both ways on both transports, the Base64 and `x-mcp-header` rules (unit tests use the spec's own examples), an invalid annotation excluding a tool, SSE replies with interleaved notifications, both `InputRequiredResult` shapes, refresh via the listen stream on both transports, legacy session id and DELETE, the 401 diagnostic. The support example adds `status-mcp-server` (Streamable HTTP, `x-mcp-header`) and a test that runs it.
+- Live (no API key: a scripted model drives real MCP calls): Cloudflare docs (2026-07-28, `listChanged`, `ttlMs: 0`), Context7 (2026-07-28, no `resultType`) and DeepWiki (2025-11-25 sessions; it rejects the probe with `-32600`) together: all 7 tools discovered and sorted, one call to each succeeded; `App.init` took 1.2 s.
+- Not done: the legacy GET stream, so legacy HTTP servers' list changes are only seen when they arrive on a response stream.
 
 ### 17.6 N6: release v1.1.0
 
