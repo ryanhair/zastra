@@ -83,7 +83,9 @@ pub fn Handle(comptime W: type) type {
         }
 
         /// Resume a run suspended at step `S` with its typed `Resume` value.
-        pub fn resumeStep(h: Self, comptime S: type, arena: Allocator, run_id: []const u8, value: ResumeOf(S)) Error!W.Result {
+        /// For a `z.step.agent(A, ...)` step, `S` can be `z.step.agentOf(A)`.
+        pub fn resumeStep(h: Self, comptime S_: type, arena: Allocator, run_id: []const u8, value: ResumeOf(S_)) Error!W.Result {
+            const S = StepOf(S_);
             const store = h.st.storage orelse return error.StorageFailed;
             const rec = (store.loadRun(arena, run_id) catch return error.StorageFailed) orelse {
                 h.st.diagPrint("workflow '{s}': no run '{s}'", .{ W.id, run_id });
@@ -107,6 +109,10 @@ pub fn Handle(comptime W: type) type {
                 };
             }
             const at = rec.suspended_at orelse "";
+            if (std.mem.eql(u8, rec.status, "running")) {
+                h.st.diagPrint("workflow '{s}' run '{s}' is running (being resumed elsewhere)", .{ W.id, run_id });
+                return error.RunBusy;
+            }
             const ok = std.mem.eql(u8, rec.status, "suspended") and pathIsStep(S, at);
             if (!ok) {
                 h.st.diagPrint("workflow '{s}' run '{s}' is {s}{s}{s}, not suspended at '{s}'", .{
@@ -143,9 +149,24 @@ pub fn Handle(comptime W: type) type {
         }
 
         pub fn ResumeOf(comptime S: type) type {
+            return StepOf(S).Resume;
+        }
+
+        /// `S` itself, or the step `z.step.agentOf(A)` names.
+        pub fn StepOf(comptime S: type) type {
             comptime {
-                for (W.suspendable_steps) |T| if (T == S) return S.Resume;
-                @import("../meta/errors.zig").fail("resumeStep({s}, ...): '{s}' is not a suspendable step of workflow '{s}'", .{ step.idOf(S), step.idOf(S), W.id });
+                const errors = @import("../meta/errors.zig");
+                if (@hasDecl(S, "zastra_agent_of")) {
+                    const A = S.zastra_agent_of;
+                    var found: ?type = null;
+                    for (W.suspendable_steps) |T| if (@hasDecl(T, "zastra_agent_step") and T.zastra_agent_step == A) {
+                        if (found != null) errors.fail("resumeStep(z.step.agentOf({s}), ...): workflow '{s}' has more than one step running agent '{s}'; pass the step type instead", .{ A.id, W.id, A.id });
+                        found = T;
+                    };
+                    return found orelse errors.fail("resumeStep(z.step.agentOf({s}), ...): workflow '{s}' has no suspendable step running agent '{s}'", .{ A.id, W.id, A.id });
+                }
+                for (W.suspendable_steps) |T| if (T == S) return S;
+                errors.fail("resumeStep({s}, ...): '{s}' is not a suspendable step of workflow '{s}'", .{ step.idOf(S), step.idOf(S), W.id });
             }
         }
 

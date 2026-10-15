@@ -143,15 +143,17 @@ pub fn main(init: std.process.Init) !void {
             // `Suspended` is the comptime-derived union of every suspendable
             // step in the graph. Exhaustive: add a new one, this stops compiling.
             .suspended => |s| switch (s.at) {
-                .approve_refund => |p| {
-                    // The snapshot is already in storage. You can exit the
-                    // process; `s.run_id` is all you need to come back.
-                    std.log.info("needs approval: {d}¢ on {s} (run {s})", .{ p.amount_cents, p.order_id, s.run_id });
+                .refunder => |approvals| {
+                    // The run is already in storage. You can exit the process;
+                    // `s.run_id` and the request ids are all you need to come back.
+                    for (approvals.requests) |req| switch (req.call) {
+                        .issue_refund => |in| std.log.info("needs approval: {d}¢ on {s} (run {s})", .{ in.amount_cents, in.order_id, s.run_id }),
+                    };
 
-                    // ...later, e.g. from an HTTP handler or a CLI command:
-                    const resumed = try wf.resumeStep(app.ApproveRefund, arena.allocator(), s.run_id, .{
-                        .approved = true,
-                        .approver = "ryan",
+                    // ...later, e.g. from an HTTP handler or a CLI command.
+                    // Requests left out stay pending and the run stays suspended.
+                    const resumed = try wf.resumeStep(z.step.agentOf(app.Refunder), arena.allocator(), s.run_id, .{
+                        .approve = &.{approvals.requests[0].id},
                     });
                     std.debug.assert(resumed == .completed);
                 },

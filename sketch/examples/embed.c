@@ -99,7 +99,8 @@ int main(void) {
     if (r) printf("\ntriage: %s\n", zastra_result_json(r));
     zastra_result_free(r);
 
-    /* Workflows: start returns {"status":"suspended","run_id":...,"at":"approve_refund",...} */
+    /* Workflows: start can return {"status":"suspended","run_id":...,"at":"refunder","payload":{"requests":[...]}};
+     * resume with support_workflow_resume(app, run_id, "refunder", "{\"approve\":[\"<request id>\"]}", &err). */
     r = support_workflow_start(app, SUPPORT_WORKFLOW_HANDLE_TICKET,
         "{\"customer_id\":\"customer-42\",\"subject\":\"Broken\",\"body\":\"ORD-1042 cracked\"}",
         &err);

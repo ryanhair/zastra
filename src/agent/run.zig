@@ -76,6 +76,45 @@ pub fn Options(comptime A: type) type {
         /// Parent span (workflows).
         trace_parent: ?*const trace.Span = null,
         trace_id: ?[16]u8 = null,
+        /// Internal (workflow steps, D34): save the run under `run_id` when
+        /// it finishes, result included, so a replayed step reuses it
+        /// instead of running the agent again.
+        keep_result: bool = false,
+    };
+}
+
+/// A finished run's result as stored for `keep_result` (no messages).
+pub fn StoredResult(comptime A: type) type {
+    if (A.has_output_type) return struct {
+        text: []const u8,
+        output: A.Output,
+        steps: u32,
+        usage: msg.Usage,
+        finish_reason: msg.FinishReason,
+    };
+    return struct {
+        text: []const u8,
+        steps: u32,
+        usage: msg.Usage,
+        finish_reason: msg.FinishReason,
+    };
+}
+
+/// Load a kept result (see `Options.keep_result`).
+pub fn loadKeptResult(comptime A: type, arena: Allocator, run_id: []const u8, state_json: []const u8) error{ OutOfMemory, CorruptSnapshot }!GenerateResult(A) {
+    var issue: parse.Issue = .{};
+    const r = parse.parse(StoredResult(A), arena, state_json, &issue) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ValidationFailed => return error.CorruptSnapshot,
+    };
+    return .{
+        .text = r.text,
+        .output = if (comptime A.has_output_type) r.output else {},
+        .steps = r.steps,
+        .usage = r.usage,
+        .finish_reason = r.finish_reason,
+        .messages = &.{},
+        .run_id = run_id,
     };
 }
 
@@ -143,6 +182,7 @@ const Snapshot = struct {
     resource: ?[]const u8,
     trace_id: []const u8,
     created_at: i64,
+    keep_result: bool = false,
 };
 
 const SavedCall = struct {
@@ -263,6 +303,7 @@ pub fn Stream(comptime A: type) type {
                 .max_steps = opts.max_steps orelse A.max_steps_default,
                 .input = input,
                 .created_at = st.nowMs(),
+                .persisted = opts.keep_result,
             };
             s.run_span = st.tracer.begin(.agent_run, A.id, s.trace_id, opts.trace_parent);
             s.run_span.attr("agent", A.id);
@@ -388,6 +429,7 @@ pub fn Stream(comptime A: type) type {
                 .resource = s.opts.resource,
                 .trace_id = try std.fmt.allocPrint(s.arena, "{x}", .{s.trace_id[0..]}),
                 .created_at = s.created_at,
+                .keep_result = s.opts.keep_result,
             };
         }
 
@@ -402,6 +444,7 @@ pub fn Stream(comptime A: type) type {
                 .max_tokens = snap.max_tokens,
                 .run_id = run_id,
                 .trace_id = trace_id,
+                .keep_result = snap.keep_result,
             });
             errdefer s.deinit();
             s.persisted = true;
@@ -566,6 +609,14 @@ pub fn Stream(comptime A: type) type {
         fn saveStatus(s: *Self, status: []const u8) void {
             if (!s.persisted) return;
             const store = s.st.storage orelse return;
+            var state_json: []const u8 = "{}";
+            if (s.opts.keep_result and std.mem.eql(u8, status, "completed")) {
+                if (A.has_output_type) {
+                    if (s.output) |o| state_json = json.stringifyAlloc(s.arena, StoredResult(A){ .text = s.last_text, .output = o, .steps = s.step, .usage = s.usage, .finish_reason = s.finish_reason }) catch "{}";
+                } else {
+                    state_json = json.stringifyAlloc(s.arena, StoredResult(A){ .text = s.last_text, .steps = s.step, .usage = s.usage, .finish_reason = s.finish_reason }) catch "{}";
+                }
+            }
             store.saveRun(.{
                 .run_id = s.run_id,
                 .kind = .agent,
@@ -573,7 +624,7 @@ pub fn Stream(comptime A: type) type {
                 .fingerprint = A.run_fingerprint,
                 .status = status,
                 .suspended_at = null,
-                .state_json = "{}",
+                .state_json = state_json,
                 .created_at = s.created_at,
                 .updated_at = s.st.nowMs(),
             }) catch |err| std.log.warn("zastra: agent '{s}' run '{s}': recording status '{s}': {t}", .{ A.id, s.run_id, status, err });

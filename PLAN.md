@@ -610,13 +610,12 @@ Approvals:
 - `stream.respond(id, .approve | .{ .deny = reason })` resumes the run.
 - In `generate` (non-streaming), an agent with gated tools returns `.suspended` with the pending calls, after saving the run (v1.1, D31; v1 returned `error.ApprovalRequired`). Alternatively, `opts.on_approval` can supply a callback.
 - Approval state is held in memory only in v1. Persisting a paused agent run is v1.1; workflows already persist.
-- An agent called from a workflow step (`w.agent(A)` or `z.step.agent`) can't pause for approval in v1, because the paused agent run can't be persisted in the workflow snapshot. Using an agent with any approval-gated tool there fails to compile (D18):
+- An agent with approval-gated tools inside a workflow step suspends the workflow (v1.1, D34; v1 made it a compile error, D18). `z.step.agent(A, ...)` does it automatically; a custom step declares `Suspend = z.Approvals(A)` and `Resume = z.Decisions(A)` and calls `w.agent(A).run(...)`. `w.agent(A).generate` on such an agent, or one inside `z.step.parallel`, is still a compile error:
   ```
-  error: zastra: step 'draft_reply' calls agent 'support', which has approval-gated tool
-         'issue_refund'. Agents in workflow steps can't pause for approval in v1; move the
-         approval into a step with `Suspend`/`Resume`, or use an agent without gated tools.
+  error: zastra: step 'draft_reply' calls `w.agent(support).generate`, but agent 'support' has
+         approval-gated tool 'issue_refund'. Use `w.agent(support).run(...)` and declare
+         `pub const Suspend = z.Approvals(support);` and `pub const Resume = z.Decisions(support);` ...
   ```
-  This check needs a compile-fail test like every other §5 check.
 
 Results:
 - `GenerateResult(A)` holds `text`, `output` (when `.output` is set), `steps`, `usage` (input, output, cache tokens, `cost_usd`), `finish_reason`, and `messages` (when `opts.include_messages` is set).
@@ -1299,6 +1298,15 @@ _ = try rt.workflow(HandleTicket).resumeStep(z.step.agentOf(Support), arena, run
 - A custom step with two gated agent calls.
 - Compile-fail cases for the remaining D18 cases.
 - Golden Mermaid shows the suspend point.
+
+**Implemented (N4, 2026-10-15):**
+- `z.Approvals(A)` (typed `requests`), `z.Decisions(A)` = `.{ .approve = &.{id}, .deny = &.{.{ .id, .reason }} }` (one shared struct, so it serializes to JSON and C as-is), `z.step.agentOf(A)` for `resumeStep`.
+- `w.agent(A).run(...)` saves each call as an agent run with id `<wf_run_id>/<step_path>#<n>` and `keep_result`, so a finished call's result is stored with it. On replay, finished calls return their stored result without a model request or tool execution; the first suspended call gets the step's decisions (`w.resumed`) and continues; later calls run normally.
+- Approvals of a step left undecided keep the workflow suspended with the same requests. Resuming a workflow run that another process is resuming is `error.RunBusy`.
+- The gated agent's `run_fingerprint` is folded into the workflow fingerprint.
+- Compile errors: `w.agent(A).generate` on a gated agent (points at `.run` and the declarations), `.run` without the declarations, `.run` on an ungated agent, `z.Approvals` of an ungated agent, a gated agent step inside `z.step.parallel`.
+- The sketch and the support example: `Refunder` agent plus `Refund = z.step.agent(Refunder, ...)` replace `FetchOrder → ApproveRefund` in the refund path; their test suspends, reopens the SQLite file in a second harness, and resumes with `z.step.agentOf(Refunder)`. Golden Mermaid shows `refunder ⏸`; the header has `SUPPORT_REFUNDER_RESUME_SCHEMA`.
+- Tests (`tests/workflow_approval_test.zig`): restart and resume, an undecided resume, deny, two gated calls in one custom step (the first isn't repeated), `RunBusy`, the fingerprint fold.
 
 ### 17.5 N5: MCP client for the 2026-07-28 spec (D38–D40)
 

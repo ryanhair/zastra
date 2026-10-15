@@ -6,10 +6,8 @@ flowchart TD
     triage --> branch_0
     subgraph refund_sub [refund]
     refund_start((refund))
-    refund_fetch_order[fetch_order]
-    refund_start --> refund_fetch_order
-    refund_approve_refund[[approve_refund ⏸]]
-    refund_fetch_order --> refund_approve_refund
+    refund_refunder[[refunder ⏸]]
+    refund_start --> refund_refunder
     end
     branch_0 -->|arm 0| refund_start
     subgraph answer_sub [answer]
@@ -28,6 +26,6 @@ flowchart TD
     end
     branch_0 -->|otherwise| answer_start
     notify_customer[notify_customer]
-    refund_approve_refund --> notify_customer
+    refund_refunder --> notify_customer
     answer_draft_reply --> notify_customer
     notify_customer --> finish([end])

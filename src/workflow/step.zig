@@ -7,9 +7,10 @@ const reflect = @import("../meta/reflect.zig");
 const make = @import("../meta/make.zig");
 const template = @import("../prompt/template.zig");
 const agent_mod = @import("../agent/agent.zig");
-const run = @import("../agent/run.zig");
+const agent_run = @import("../agent/run.zig");
 const runtime = @import("../runtime.zig");
 const trace = @import("../trace/trace.zig");
+const ev = @import("../agent/events.zig");
 const Allocator = std.mem.Allocator;
 
 pub const known_step_decls = [_][]const u8{ "Input", "Output", "run", "name", "Suspend", "Resume", "needs", "retry", "retry_on", "timeout_ms" };
@@ -65,6 +66,52 @@ pub fn Suspendable(comptime S: type) type {
     return union(enum) {
         done: S.Output,
         suspended: S.Suspend,
+    };
+}
+
+/// `z.Approvals(A)`: what a step that runs approval-gated agent `A` suspends
+/// with (D34). Declare `pub const Suspend = z.Approvals(A);` and
+/// `pub const Resume = z.Decisions(A);`.
+pub fn Approvals(comptime A: type) type {
+    comptime {
+        if (!agent_mod.isAgent(A)) errors.fail("z.Approvals(A): A must be an agent created with z.Agent", .{});
+        if (!A.has_approvals) errors.fail("z.Approvals({s}): agent '{s}' has no approval-gated tools, so it never needs approvals", .{ A.id, A.id });
+        return struct {
+            pub const zastra_approvals_of = A;
+            /// The calls waiting for a decision, typed per tool.
+            requests: []const ev.ApprovalRequest(A.ApprovalCall),
+        };
+    }
+}
+
+/// `z.Decisions(A)`: how a step suspended with `z.Approvals(A)` is resumed.
+/// Requests left out stay pending, and the step suspends again with them.
+pub fn Decisions(comptime A: type) type {
+    _ = Approvals(A);
+    return ApprovalDecisions;
+}
+
+pub const ApprovalDecisions = struct {
+    /// Request ids to approve.
+    approve: []const []const u8 = &.{},
+    /// Request ids to deny, with the reason the model sees.
+    deny: []const Denial = &.{},
+
+    pub const Denial = struct { id: []const u8, reason: []const u8 };
+
+    pub fn toList(d: ApprovalDecisions, arena: Allocator) Allocator.Error![]const agent_run.ApprovalDecision {
+        const out = try arena.alloc(agent_run.ApprovalDecision, d.approve.len + d.deny.len);
+        for (d.approve, 0..) |id, i| out[i] = .{ .id = id, .decision = .approve };
+        for (d.deny, 0..) |x, i| out[d.approve.len + i] = .{ .id = x.id, .decision = .{ .deny = x.reason } };
+        return out;
+    }
+};
+
+/// `z.step.agentOf(A)`: names the `z.step.agent(A, ...)` step in
+/// `resumeStep` without keeping its type around.
+pub fn agentOf(comptime A: type) type {
+    return struct {
+        pub const zastra_agent_of = A;
     };
 }
 
@@ -169,6 +216,9 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
         step_id: []const u8,
         resource: ?[]const u8,
         trace_id: [16]u8,
+        /// Internal: numbers this step's `w.agent(A).run` calls, for their
+        /// saved run ids.
+        agent_calls: u32 = 0,
 
         /// Format into `arena`.
         pub fn fmt(w: *Self, comptime f: []const u8, args: anytype) Allocator.Error![]u8 {
@@ -179,27 +229,82 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
         /// step (`"<run_id>/<step_id>"`), working memory to the workflow's
         /// `resource` (PLAN.md D17).
         pub fn agent(w: *Self, comptime A: type) AgentCall(A) {
-            if (A.has_approvals) {
-                comptime var gated: []const u8 = "";
-                inline for (A.tools) |TI| if (TI.approval_kind != .never and gated.len == 0) {
-                    gated = TI.name;
-                };
-                errors.fail("step '{s}' calls agent '{s}', which has approval-gated tool '{s}'. Agents in workflow steps can't pause for approval in v1; move the approval into a step with `Suspend`/`Resume`, or use an agent without gated tools (PLAN.md D18)", .{ idOf(S), A.id, gated });
-            }
             return .{ .w = w };
         }
 
         pub fn AgentCall(comptime A: type) type {
             return struct {
                 w: *Self,
-                pub fn generate(c: @This(), input: anytype, opts: run.Options(A)) run.Error!run.GenerateResult(A) {
+
+                /// Run an agent without approval-gated tools to completion.
+                pub fn generate(c: @This(), input: anytype, opts: agent_run.Options(A)) agent_run.Error!agent_run.GenerateResult(A) {
+                    if (A.has_approvals) {
+                        comptime var gated: []const u8 = "";
+                        inline for (A.tools) |TI| if (TI.approval_kind != .never and gated.len == 0) {
+                            gated = TI.name;
+                        };
+                        errors.fail("step '{s}' calls `w.agent({s}).generate`, but agent '{s}' has approval-gated tool '{s}'. Use `w.agent({s}).run(...)` and declare `pub const Suspend = z.Approvals({s});` and `pub const Resume = z.Decisions({s});` on the step, so the workflow can pause for the approval (PLAN.md D34)", .{ idOf(S), A.id, A.id, gated, A.id, A.id, A.id });
+                    }
+                    const msgs = try agent_run.toMessages(c.w.arena, input);
+                    return agent_run.generate(A, c.w.state, c.w.arena, msgs, try c.options(opts));
+                }
+
+                pub const RunResult = union(enum) {
+                    done: agent_run.GenerateResult(A),
+                    suspended: Approvals(A),
+                };
+
+                /// Run an agent with approval-gated tools. Return
+                /// `.{ .suspended = a }` from the step when it suspends. When
+                /// the step is resumed and replayed, this call picks the saved
+                /// agent run back up with the step's decisions, and calls that
+                /// already finished return their saved results (D34).
+                pub fn run(c: @This(), input: anytype, opts: agent_run.Options(A)) agent_run.Error!RunResult {
+                    comptime {
+                        if (!A.has_approvals) errors.fail("step '{s}' calls `w.agent({s}).run`, but agent '{s}' has no approval-gated tools; use `.generate(...)`", .{ idOf(S), A.id, A.id });
+                        if (!isSuspendable(S) or S.Suspend != Approvals(A) or S.Resume != ApprovalDecisions)
+                            errors.fail("step '{s}' calls `w.agent({s}).run`, so it must declare `pub const Suspend = z.Approvals({s});` and `pub const Resume = z.Decisions({s});`", .{ idOf(S), A.id, A.id, A.id });
+                    }
+                    const w = c.w;
+                    const n = w.agent_calls;
+                    w.agent_calls += 1;
+                    const id = try std.fmt.allocPrint(w.arena, "{s}/{s}#{d}", .{ w.run_id, w.step_id, n });
+                    var o = try c.options(opts);
+                    o.run_id = id;
+                    o.keep_result = true;
+                    const store = w.state.storage orelse return error.StorageFailed;
+                    const rec = store.loadRun(w.arena, id) catch return error.StorageFailed;
+                    const r: agent_run.RunResult(A) = if (rec) |saved| blk: {
+                        if (std.mem.eql(u8, saved.status, "completed"))
+                            return .{ .done = try agent_run.loadKeptResult(A, w.arena, id, saved.state_json) };
+                        if (!std.mem.eql(u8, saved.status, "suspended")) {
+                            w.state.diagPrint("step '{s}': agent '{s}' run '{s}' is {s}", .{ w.step_id, A.id, id, saved.status });
+                            return if (std.mem.eql(u8, saved.status, "running")) error.RunBusy else error.NotSuspended;
+                        }
+                        // The step's decisions go to the first suspended call.
+                        var decisions: []const agent_run.ApprovalDecision = &.{};
+                        if (w.resumed) |d| {
+                            decisions = try d.toList(w.arena);
+                            w.resumed = null;
+                        }
+                        break :blk try agent_run.resumeRun(A, w.state, w.arena, id, decisions);
+                    } else blk: {
+                        const msgs = try agent_run.toMessages(w.arena, input);
+                        break :blk try agent_run.generate(A, w.state, w.arena, msgs, o);
+                    };
+                    return switch (r) {
+                        .completed => |done| .{ .done = done },
+                        .suspended => |su| .{ .suspended = .{ .requests = su.requests } },
+                    };
+                }
+
+                fn options(c: @This(), opts: agent_run.Options(A)) Allocator.Error!agent_run.Options(A) {
                     var o = opts;
                     if (o.thread == null) o.thread = try std.fmt.allocPrint(c.w.arena, "{s}/{s}", .{ c.w.run_id, c.w.step_id });
                     if (o.resource == null) o.resource = c.w.resource;
                     if (o.trace_parent == null) o.trace_parent = c.w.trace;
                     if (o.trace_id == null) o.trace_id = c.w.trace_id;
-                    const msgs = try run.toMessages(c.w.arena, input);
-                    return run.generate(A, c.w.state, c.w.arena, msgs, o);
+                    return o;
                 }
             };
         }
@@ -218,8 +323,27 @@ pub fn agentStep(comptime A: type, comptime opts: anytype) type {
         const prompt: []const u8 = if (@hasField(@TypeOf(opts), "prompt")) opts.prompt else "{" ++ "}";
         const step_name: []const u8 = if (@hasField(@TypeOf(opts), "name")) opts.name else A.id;
         if (@hasField(@TypeOf(opts), "prompt")) template.check(In, prompt, "step '" ++ step_name ++ "'");
-        if (A.has_approvals) errors.fail("step '{s}' uses agent '{s}', which has approval-gated tools. Agents in workflow steps can't pause for approval in v1; move the approval into a step with `Suspend`/`Resume`, or use an agent without gated tools (PLAN.md D18)", .{ step_name, A.id });
         const Out = if (A.has_output_type) A.Output else []const u8;
+        const promptText = PromptText(In, opts).render;
+        if (A.has_approvals) return struct {
+            // An agent with approval-gated tools pauses the workflow for its
+            // approvals (D34).
+            const Self = @This();
+            pub const Input = In;
+            pub const Output = Out;
+            pub const name = step_name;
+            pub const zastra_agent_step = A;
+            pub const Suspend = Approvals(A);
+            pub const Resume = ApprovalDecisions;
+
+            pub fn run(w: *StepCtx(A.Ctx, Self), in: Input) !Suspendable(Self) {
+                const r = try w.agent(A).run(try promptText(w.arena, in), .{});
+                return switch (r) {
+                    .done => |d| .{ .done = if (A.has_output_type) d.output else d.text },
+                    .suspended => |a| .{ .suspended = a },
+                };
+            }
+        };
         return struct {
             const Self = @This();
             pub const Input = In;
@@ -228,16 +352,22 @@ pub fn agentStep(comptime A: type, comptime opts: anytype) type {
             pub const zastra_agent_step = A;
 
             pub fn run(w: *StepCtx(A.Ctx, Self), in: Input) !Output {
-                const text = if (@hasField(@TypeOf(opts), "prompt"))
-                    try template.renderAlloc(In, prompt, w.arena, in)
-                else
-                    try @import("../schema/json.zig").stringifyAlloc(w.arena, in);
-                const r = try w.agent(A).generate(text, .{});
+                const r = try w.agent(A).generate(try promptText(w.arena, in), .{});
                 return if (A.has_output_type) r.output else r.text;
             }
         };
     }
 }
+
+fn PromptText(comptime In: type, comptime opts: anytype) type {
+    return struct {
+        fn render(arena: Allocator, in: In) ![]const u8 {
+            if (@hasField(@TypeOf(opts), "prompt")) return template.renderAlloc(In, opts.prompt, arena, in);
+            return @import("../schema/json.zig").stringifyAlloc(arena, in);
+        }
+    };
+}
+
 
 /// `z.step.parallel(.{ .order = FetchOrder, .faq = SearchFaq })`: run steps
 /// concurrently on the same Input. Output is a struct keyed like the input.
@@ -258,6 +388,8 @@ pub fn parallel(comptime branches: anytype) type {
             if (S.Input != First.Input) errors.fail("z.step.parallel: every branch must accept the same Input; `.{s}` takes {s}, but `.{s}` takes {s}", .{
                 f.name, @typeName(S.Input), fields[0].name, @typeName(First.Input),
             });
+            if (@hasDecl(S, "zastra_agent_step") and S.zastra_agent_step.has_approvals)
+                errors.fail("z.step.parallel: `.{s}` runs agent '{s}', which has approval-gated tools; parallel branches can't pause for approval. Run it as its own step before or after the group (PLAN.md D34)", .{ f.name, S.zastra_agent_step.id });
             if (isSuspendable(S)) errors.fail("z.step.parallel: `.{s}` is suspendable; steps inside a parallel group can't suspend in v1", .{f.name});
             names = names ++ &[_][]const u8{f.name};
             outs = outs ++ &[_]type{S.Output};

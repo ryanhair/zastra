@@ -252,7 +252,10 @@ fn analyzeStep(comptime wf: []const u8, comptime In: type, comptime S: type, com
         }
         out.slots = &[_]Slot{.{ .path = path, .T = Done(S.Output), .S = S }};
         out.shape = "step(" ++ path ++ ":" ++ fingerprint.describe(S.Input) ++ "->" ++ fingerprint.describe(S.Output) ++
-            (if (step.isSuspendable(S)) ";susp:" ++ fingerprint.describe(S.Suspend) ++ "/" ++ fingerprint.describe(S.Resume) else "") ++ ")";
+            (if (step.isSuspendable(S)) ";susp:" ++ fingerprint.describe(S.Suspend) ++ "/" ++ fingerprint.describe(S.Resume) else "") ++
+            // A gated agent's saved runs only resume under the same agent
+            // version, so its fingerprint is part of the workflow's (D34).
+            (if (step.isSuspendable(S) and @hasDecl(S.Suspend, "zastra_approvals_of")) std.fmt.comptimePrint(";agent:{x}", .{S.Suspend.zastra_approvals_of.run_fingerprint}) else "") ++ ")";
         if (step.isSuspendable(S)) out.suspendable = &[_]type{S};
         if (@hasDecl(S, "zastra_agent_step")) out.agents = &[_]type{S.zastra_agent_step};
         const members: []const type = if (step.isParallel(S)) blk: {

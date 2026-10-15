@@ -206,6 +206,19 @@ _ = try rt.workflow(HandleTicket).resumeStep(Approve, arena, run_id, .{ .approve
 
 A step runs **at least once**: after a crash, or on resume, it is re-run from the top. Make side effects idempotent, for example keyed on `w.run_id`.
 
+An agent with approval-gated tools can be a step too. The workflow suspends when one of its calls needs a human, and resumes with the decisions:
+
+```zig
+const Refund = z.step.agent(Refunder, .{ .input = Triage, .prompt = "Refund request: {summary}" });
+// ...
+.suspended => |s| switch (s.at) {
+    .refunder => |approvals| for (approvals.requests) |req| ..., // typed per tool
+},
+_ = try rt.workflow(HandleTicket).resumeStep(z.step.agentOf(Refunder), arena, run_id, .{ .approve = &.{req_id} });
+```
+
+The agent run is saved with the workflow run, so its tools run once, after approval. In a custom step, declare `pub const Suspend = z.Approvals(Refunder);` and `pub const Resume = z.Decisions(Refunder);` and call `w.agent(Refunder).run(...)`. There's no resume branch to write: on replay, finished calls return their saved results. Gated agents can't run inside `z.step.parallel`.
+
 ## 7. Test without a network
 
 ```zig

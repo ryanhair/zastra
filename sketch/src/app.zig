@@ -165,10 +165,17 @@ pub const TriageAgent = z.Agent(Ctx, .{
     .output = Triage,
 });
 
-/// A reply-only agent for use inside workflows. It has no approval-gated tools:
-/// an agent in a workflow step can't pause for approval in v1, so using
-/// `Support` (which has IssueRefund) there would be a compile error. Approvals
-/// in workflows are modeled as `Suspend`/`Resume` steps (see ApproveRefund).
+/// Handles the refund branch of the workflow. IssueRefund is approval-gated,
+/// so when it needs a human the whole workflow pauses (see `Refund` below).
+pub const Refunder = z.Agent(Ctx, .{
+    .name = "refunder",
+    .model = "anthropic/claude-sonnet-4-6",
+    .instructions = @embedFile("prompts/refund.md"),
+    .tools = .{ LookupOrder, IssueRefund },
+    .output = Resolution,
+});
+
+/// A reply-only agent for use inside workflows.
 pub const ReplyWriter = z.Agent(Ctx, .{
     .name = "reply_writer",
     .model = "anthropic/claude-sonnet-4-6",
@@ -202,44 +209,16 @@ const FetchOrder = struct {
     }
 };
 
-const ApproveRefund = struct {
-    pub const Input = ?Order;
-    pub const Output = Resolution;
-
-    /// What the workflow persists and hands back to you when it pauses...
-    pub const Suspend = struct { order_id: []const u8, amount_cents: u32 };
-    /// ...and what you must provide to resume it. Both are typed end to end.
-    pub const Resume = struct { approved: bool, approver: []const u8 };
-
-    /// Declared dependencies on earlier data. `z.initial(T)` is the workflow
-    /// input (its type is checked at `.commit()`). Naming a step that doesn't
-    /// run before this one in every path is a compile error.
-    pub const needs = .{ .triage = z.initial(Triage) };
-
-    pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !z.Suspendable(@This()) {
-        const order = in orelse return .{ .done = .{
-            .kind = .escalated,
-            .message = "Couldn't find the order; routing to a human.",
-        } };
-
-        if (order.total_cents > w.ctx.auto_refund_limit_cents) {
-            // w.resumed: ?Resume. Null on first run, set after resume.
-            const decision = w.resumed orelse return .{ .suspended = .{
-                .order_id = order.id,
-                .amount_cents = order.total_cents,
-            } };
-            if (!decision.approved) return .{ .done = .{
-                .kind = .escalated,
-                .message = try w.fmt("Refund declined by {s}.", .{decision.approver}),
-            } };
-        }
-
-        // Steps run at least once: a crash or a resume re-runs this function
-        // from the top. Make side effects idempotent, e.g. keyed on the run.
-        _ = try w.ctx.db.refundOnce(w.arena, w.run_id, order.id, order.total_cents);
-        return .{ .done = .{ .kind = .refunded, .message = "Your refund is on its way." } };
-    }
-};
+/// An agent with approval-gated tools as a step (PLAN.md D34). When
+/// IssueRefund needs a human, the workflow suspends with the typed requests
+/// (`Suspend = z.Approvals(Refunder)`) and resumes with the decisions
+/// (`Resume = z.Decisions(Refunder)`). There's no resume branch to write: on
+/// resume the step replays and picks the saved agent run back up, so the
+/// refund tool runs once, after approval.
+pub const Refund = z.step.agent(Refunder, .{
+    .input = Triage,
+    .prompt = "Refund request: {summary}\nOrder: {order_id}",
+});
 
 const SearchFaq = struct {
     pub const Input = Triage;
@@ -307,8 +286,7 @@ fn wantsRefund(t: Triage) bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RefundPath = z.Workflow(Ctx, "refund", Triage)
-    .then(FetchOrder)
-    .then(ApproveRefund)
+    .then(Refund)
     .commit();
 
 const AnswerPath = z.Workflow(Ctx, "answer", Triage)
@@ -326,7 +304,7 @@ pub const HandleTicket = z.Workflow(Ctx, "handle_ticket", Ticket)
     .commit();
 
 // Because the whole graph is known at comptime, zastra derives:
-//   HandleTicket.Suspended = union(enum) { approve_refund: ApproveRefund.Suspend }
+//   HandleTicket.Suspended = union(enum) { refunder: z.Approvals(Refunder) }
 // so handling a paused run is an exhaustive `switch`. Add a new suspendable
 // step and every call site that doesn't handle it stops compiling.
 
@@ -337,7 +315,7 @@ pub const HandleTicket = z.Workflow(Ctx, "handle_ticket", Ticket)
 
 pub const App = z.App(.{
     .ctx = Ctx,
-    .agents = .{ Support, TriageAgent, ReplyWriter },
+    .agents = .{ Support, TriageAgent, Refunder, ReplyWriter },
     .workflows = .{HandleTicket},
     // Comptime choice so unused backends are never compiled in.
     .storage = .sqlite, // .sqlite | .memory
@@ -351,26 +329,43 @@ pub const App = z.App(.{
 // a call with the wrong arguments fails to compile.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test "large refunds pause for approval and resume" {
+test "large refunds pause for approval and resume after a restart" {
     var db = OrderDb.fake(&.{.{ .id = "ORD-1", .status = .delivered, .total_cents = 90_00, .items = &.{} }});
     var ctx: Ctx = .{ .db = &db };
+    const path = ".zig-cache/zastra-example-restart.sqlite";
+    std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
 
-    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    var run_id_buf: [64]u8 = undefined;
+    var req_id_buf: [64]u8 = undefined;
+    var run_id: []const u8 = "";
+    var req_id: []const u8 = "";
+    {
+        var h = try z.testing.harness(App, .{ .ctx = &ctx, .storage_path = path });
+        defer h.deinit();
+        h.script(TriageAgent, &.{
+            .output(Triage{ .category = .refund, .urgency = 3, .order_id = "ORD-1", .summary = "Broken item" }),
+        });
+        h.script(Refunder, &.{
+            .tool(LookupOrder, .{ .order_id = "ORD-1" }),
+            .tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 90_00, .reason = .damaged }),
+        });
+        const ticket: Ticket = .{ .customer_id = "c-42", .subject = "Broken", .body = "Arrived cracked. ORD-1" };
+        const paused = try z.testing.expectSuspended(try h.workflow(HandleTicket).start(ticket), .refunder);
+        // The pending call is typed: `.issue_refund` carries IssueRefund.Input.
+        switch (paused.payload.requests[0].call) {
+            .issue_refund => |in| try std.testing.expectEqual(90_00, in.amount_cents),
+        }
+        try std.testing.expectEqual(0, db.refundCount());
+        run_id = try std.fmt.bufPrint(&run_id_buf, "{s}", .{paused.run_id});
+        req_id = try std.fmt.bufPrint(&req_id_buf, "{s}", .{paused.payload.requests[0].id});
+    }
+
+    // A new process with the same database picks the run up.
+    var h = try z.testing.harness(App, .{ .ctx = &ctx, .storage_path = path });
     defer h.deinit();
-
-    h.script(TriageAgent, &.{
-        .output(Triage{ .category = .refund, .urgency = 3, .order_id = "ORD-1", .summary = "Broken item" }),
-    });
-
-    const ticket: Ticket = .{ .customer_id = "c-42", .subject = "Broken", .body = "Arrived cracked. ORD-1" };
-    const first = try h.workflow(HandleTicket).start(ticket);
-    const paused = try z.testing.expectSuspended(first, .approve_refund);
-    try std.testing.expectEqual(90_00, paused.payload.amount_cents);
-
-    const done = try h.workflow(HandleTicket).resumeStep(ApproveRefund, paused.run_id, .{
-        .approved = true,
-        .approver = "ryan",
-    });
+    h.script(Refunder, &.{.output(Resolution{ .kind = .refunded, .message = "Your refund is on its way." })});
+    const done = try h.workflow(HandleTicket).resumeStep(z.step.agentOf(Refunder), run_id, .{ .approve = &.{req_id} });
     try std.testing.expect(done.completed.sent);
     try std.testing.expectEqual(1, db.refundCount());
 }

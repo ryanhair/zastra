@@ -1,4 +1,4 @@
-//! expect: zastra: step 'draft_reply' calls agent 'support', which has approval-gated tool 'issue_refund'
+//! expect: zastra: step 'draft_reply' calls `w.agent(support).generate`, but agent 'support' has approval-gated tool 'issue_refund'. Use `w.agent(support).run(...)` and declare `pub const Suspend = z.Approvals(support);` and `pub const Resume = z.Decisions(support);` on the step
 const std = @import("std");
 const z = @import("zastra");
 const Ctx = struct {};

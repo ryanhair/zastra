@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ZASTRA_ABI_VERSION 2u
-#define SUPPORT_MANIFEST_FINGERPRINT 0x337ba9d740ac4bdcull
+#define SUPPORT_MANIFEST_FINGERPRINT 0x30f530a41ab4c4f3ull
 
 #ifndef ZASTRA_COMMON_TYPES
 #define ZASTRA_COMMON_TYPES
@@ -78,16 +78,18 @@ void zastra_result_free(zastra_result *r);
 /* Agents */
 #define SUPPORT_AGENT_SUPPORT 0
 #define SUPPORT_AGENT_TRIAGE 1
-#define SUPPORT_AGENT_REPLY_WRITER 2
+#define SUPPORT_AGENT_REFUNDER 2
+#define SUPPORT_AGENT_REPLY_WRITER 3
 
 /* Workflows */
 #define SUPPORT_WORKFLOW_HANDLE_TICKET 0
 
 /* JSON Schemas for inputs and outputs */
 #define SUPPORT_TRIAGE_SCHEMA "{\"type\":\"object\",\"properties\":{\"category\":{\"type\":\"string\",\"enum\":[\"refund\",\"shipping\",\"product_question\",\"other\"]},\"urgency\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5,\"description\":\"1 = can wait a week, 5 = customer is blocked right now\"},\"order_id\":{\"type\":\"string\",\"description\":\"Order ID if the customer mentioned one, e.g. ORD-1042\"},\"summary\":{\"type\":\"string\",\"maxLength\":200,\"description\":\"One sentence, no customer PII\"}},\"required\":[\"category\",\"urgency\",\"summary\"],\"additionalProperties\":false}"
+#define SUPPORT_RESOLUTION_SCHEMA "{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"refunded\",\"answered\",\"escalated\"]},\"message\":{\"type\":\"string\"}},\"required\":[\"kind\",\"message\"],\"additionalProperties\":false}"
 #define SUPPORT_TICKET_SCHEMA "{\"type\":\"object\",\"properties\":{\"customer_id\":{\"type\":\"string\"},\"subject\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"}},\"required\":[\"customer_id\",\"subject\",\"body\"],\"additionalProperties\":false}"
 #define SUPPORT_OUTPUT_SCHEMA "{\"type\":\"object\",\"properties\":{\"sent\":{\"type\":\"boolean\"}},\"required\":[\"sent\"],\"additionalProperties\":false}"
-#define SUPPORT_APPROVE_REFUND_RESUME_SCHEMA "{\"type\":\"object\",\"properties\":{\"approved\":{\"type\":\"boolean\"},\"approver\":{\"type\":\"string\"}},\"required\":[\"approved\",\"approver\"],\"additionalProperties\":false}"
+#define SUPPORT_REFUNDER_RESUME_SCHEMA "{\"type\":\"object\",\"properties\":{\"approve\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"default\":[]},\"deny\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"reason\":{\"type\":\"string\"}},\"required\":[\"id\",\"reason\"],\"additionalProperties\":false},\"default\":[]}},\"required\":[],\"additionalProperties\":false}"
 
 /* The App */
 zastra_app *support_app_new_checked(const char *config_json, uint64_t manifest_fingerprint, zastra_error *err);

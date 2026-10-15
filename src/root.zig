@@ -60,6 +60,10 @@ pub const ApprovalDecision = @import("agent/run.zig").ApprovalDecision;
 pub const Workflow = @import("workflow/workflow.zig").Workflow;
 pub const StepCtx = @import("workflow/step.zig").StepCtx;
 pub const Suspendable = @import("workflow/step.zig").Suspendable;
+/// `Suspend` for a step that runs an agent with approval-gated tools (D34).
+pub const Approvals = @import("workflow/step.zig").Approvals;
+/// `Resume` for such a step: `.{ .approve = &.{id}, .deny = &.{.{ .id = id, .reason = "..." }} }`.
+pub const Decisions = @import("workflow/step.zig").Decisions;
 pub const Retry = @import("workflow/step.zig").Retry;
 pub const Backoff = @import("workflow/step.zig").Backoff;
 pub const initial = @import("workflow/step.zig").initial;
@@ -67,6 +71,8 @@ pub const otherwise = @import("workflow/step.zig").otherwise;
 pub const step = struct {
     pub const agent = @import("workflow/step.zig").agentStep;
     pub const parallel = @import("workflow/step.zig").parallel;
+    /// Names a `z.step.agent(A, ...)` step in `resumeStep`.
+    pub const agentOf = @import("workflow/step.zig").agentOf;
 };
 
 pub const testing = struct {
