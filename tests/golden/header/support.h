@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define ZASTRA_ABI_VERSION 2u
-#define SUPPORT_MANIFEST_FINGERPRINT 0xc0332e5b5d803ba3ull
+#define SUPPORT_MANIFEST_FINGERPRINT 0xf688b75920be5da1ull
 
 #ifndef ZASTRA_COMMON_TYPES
 #define ZASTRA_COMMON_TYPES
@@ -40,7 +40,11 @@ typedef enum zastra_event_kind {
     ZASTRA_EVENT_TOOL_RESULT = 3,
     ZASTRA_EVENT_APPROVAL_REQUEST = 4,
     ZASTRA_EVENT_STEP_FINISH = 5,
-    ZASTRA_EVENT_FINISH = 6
+    ZASTRA_EVENT_FINISH = 6,
+    /* `.partial_output = true` agents: the output so far (unvalidated), and
+     * a marker that earlier partial values were discarded (a repair). */
+    ZASTRA_EVENT_OUTPUT_PARTIAL = 7,
+    ZASTRA_EVENT_OUTPUT_PARTIAL_RESET = 8
 } zastra_event_kind;
 
 /* Pointers stay valid until the next zastra_stream_next() on the same stream.

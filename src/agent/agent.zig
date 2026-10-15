@@ -14,6 +14,7 @@ const tool = @import("../tool.zig");
 const json_schema = @import("../schema/json_schema.zig");
 const comptime_json = @import("../schema/comptime_json.zig");
 const partial = @import("../schema/partial.zig");
+const stream_parse = @import("../schema/stream_parse.zig");
 const provider = @import("../provider/provider.zig");
 const mcp = @import("../mcp/mcp.zig");
 const ev = @import("events.zig");
@@ -21,7 +22,7 @@ const ev = @import("events.zig");
 pub const known_config = [_][]const u8{
     "name",        "model",    "instructions", "tools",            "output",   "memory",
     "max_steps",   "max_tokens", "temperature", "effort",          "provider_options", "examples",
-    "allow",       "description", "reasoning",   "show_reasoning",
+    "allow",       "description", "reasoning",   "show_reasoning",  "partial_output",
 };
 
 const known_memory = [_][]const u8{ "history", "working" };
@@ -99,6 +100,13 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
         }
         const native_output = has_output and spec.supports.structured_output and
             !(spec.api != .anthropic and json_schema.containsJson(Output_));
+        const wants_partial = @hasField(C, "partial_output") and blk: {
+            if (@TypeOf(cfg.partial_output) != bool) errors.fail("{s}: `.partial_output` must be true or false", .{who});
+            break :blk cfg.partial_output;
+        };
+        if (wants_partial and !has_output)
+            errors.fail("{s}: `.partial_output = true` needs `.output`: partial values are of the output type", .{who});
+        if (has_output) _ = stream_parse.streamStrings(Output_);
 
         // ── memory ───────────────────────────────────────────────────────
         var history_limit: u32 = 0;
@@ -229,6 +237,10 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             ev_names = ev_names ++ &[_][]const u8{"reasoning_delta"};
             ev_types = ev_types ++ &[_]type{[]const u8};
         }
+        if (wants_partial) {
+            ev_names = ev_names ++ &[_][]const u8{ "output_partial", "output_partial_reset" };
+            ev_types = ev_types ++ &[_]type{ partial.Partial(Output_), void };
+        }
         if (has_tools) {
             ev_names = ev_names ++ &[_][]const u8{ "tool_call", "tool_result" };
             ev_types = ev_types ++ &[_]type{ ToolCall_, ev.ToolResult };
@@ -251,6 +263,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
         const has_approvals_ = appr_names.len > 0;
         const history_limit_final = history_limit;
         const Working_final = Working_;
+        const partial_output_final = wants_partial;
         const defs_final = defs;
         const mcp_tuple = mcp_sets;
         const final_system = system;
@@ -272,6 +285,8 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             /// Structured output uses the provider's native JSON-schema mode
             /// (otherwise a synthetic `final_answer` tool).
             pub const native_structured_output = native_output;
+            /// `.output_partial` events (`.partial_output = true`, D43).
+            pub const partial_output = partial_output_final;
             pub const Working = Working_final;
             pub const WorkingUpdate = WorkingPatch;
             pub const has_working_memory = has_working;

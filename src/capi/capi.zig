@@ -441,9 +441,9 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                     switch (e) {
                         inline else => |payload, tag| {
                             const t = @tagName(tag);
-                            const kind: c_int = comptime if (std.mem.eql(u8, t, "text_delta")) 0 else if (std.mem.eql(u8, t, "reasoning_delta")) 1 else if (std.mem.eql(u8, t, "tool_call")) 2 else if (std.mem.eql(u8, t, "tool_result")) 3 else if (std.mem.eql(u8, t, "approval_request")) 4 else if (std.mem.eql(u8, t, "step_finish")) 5 else 6;
+                            const kind: c_int = comptime if (std.mem.eql(u8, t, "text_delta")) 0 else if (std.mem.eql(u8, t, "reasoning_delta")) 1 else if (std.mem.eql(u8, t, "tool_call")) 2 else if (std.mem.eql(u8, t, "tool_result")) 3 else if (std.mem.eql(u8, t, "approval_request")) 4 else if (std.mem.eql(u8, t, "step_finish")) 5 else if (std.mem.eql(u8, t, "output_partial")) 7 else if (std.mem.eql(u8, t, "output_partial_reset")) 8 else 6;
                             out.kind = kind;
-                            const bytes: []const u8 = if (comptime kind <= 1) payload else (json.stringifyAlloc(sa, payload) catch return .err);
+                            const bytes: []const u8 = if (comptime kind <= 1) payload else if (comptime kind == 8) "{}" else (json.stringifyAlloc(sa, payload) catch return .err);
                             const z_bytes = sa.dupeZ(u8, bytes) catch return .err;
                             out.json = z_bytes.ptr;
                             out.len = bytes.len;

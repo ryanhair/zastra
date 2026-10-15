@@ -55,6 +55,8 @@ pub const Triage = struct {
         .order_id = "Order ID if the customer mentioned one, e.g. ORD-1042",
         .summary = "One sentence, no customer PII",
     };
+    // `summary` also streams as it grows in `.output_partial` events.
+    pub const stream_strings = .{.summary};
     // Emitted into the schema AND enforced when parsing the model's output.
     // A violation is fed back to the model for one repair attempt.
     pub const constraints = .{
@@ -182,6 +184,9 @@ pub const TriageAgent = z.Agent(Ctx, .{
     .model = "openai/gpt-5-mini", // catalog OpenAI models use the Responses API
     .instructions = "Classify the support ticket. Be conservative with urgency.",
     .output = Triage,
+    // `.output_partial` events while streaming: the Triage so far, field by
+    // field (a `z.Partial(Triage)`). Without this, the parser isn't compiled in.
+    .partial_output = true,
 });
 
 /// Handles the refund branch of the workflow. IssueRefund is approval-gated,

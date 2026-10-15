@@ -483,7 +483,7 @@ On resume:
 
 ### 5.15 `z.Partial(T)` and schema-specialized streaming parse
 
-**Milestone: M6 (stretch for v1; else v1.1).** v1 ships `z.Partial(T)` and its merge (used by working memory). The incremental `stream_parse` and `.output_partial` events are **v1.1**.
+**Milestone: M6 (stretch for v1; else v1.1).** v1 ships `z.Partial(T)` and its merge (used by working memory). The incremental `stream_parse` and `.output_partial` events shipped in v1.1b (§18.4, opt-in with `.partial_output = true`).
 
 **Behavior.**
 - `z.Partial(T)` is `T` with every field optional, applied recursively.
@@ -1646,6 +1646,32 @@ pub const CustomerNotes = struct {
 - Size: the anthropic-only + memory example without `.partial_output` is byte-identical before and after. With it, the cost is recorded in N11.
 - One live run per provider showing partial events from a real stream.
 - Compile-fail cases: `.partial_output` without `.output`; `stream_strings` naming a missing field or a non-string field.
+
+**Implemented (N10, 2026-10-15):**
+- `src/schema/stream_parse.zig`: `Parser(T)` (the scanner, boundaries, closing, `lenient`) and `streamStrings(T)` (comptime checks).
+  - Boundaries are values ending at depth 1 or 2. Below that, every open container holds only complete values, so closing the prefix never invents a value.
+  - One event per delta at most. A streamed string emits once it has grown by 64 bytes, cut at a character boundary (escapes, `\u` sequences and UTF-8).
+  - Values live in a scratch arena that is reset at the next emission, so an event lasts until the next `next()`.
+- **Changed from the plan:** `z.Partial` is unchanged. Arrays hold only complete elements, so their element type stays `Elem`, and working memory is unaffected.
+- **Agent:**
+  - `.partial_output = true` adds `output_partial: z.Partial(Output)` and `output_partial_reset: void`.
+  - The run's partial state is one field, void without the flag. Separate void fields cost 40 bytes in the anthropic-only binary; one field is byte-identical (656,904 B).
+  - `generate` turns partial parsing off.
+  - Native mode feeds text deltas. Fallback mode feeds `tool_call_args` for the `final_answer` call's index.
+  - When a new turn starts after partial values that didn't become the output (a repair, a retried `final_answer`, JSON before tool calls), it first emits `output_partial_reset`.
+- **Bug fixed on the way:** the Chat Completions stream returned only the first event of a chunk. A chunk that started a tool call and carried its first arguments lost those argument bytes from the event stream (the final message was always complete). Every event of a chunk is now queued.
+- **Scripted models:** `.chunked(n, step)` streams text and tool arguments in `n`-byte deltas on all three APIs.
+- **C ABI:** `ZASTRA_EVENT_OUTPUT_PARTIAL = 7` (JSON) and `ZASTRA_EVENT_OUTPUT_PARTIAL_RESET = 8` (`{}`). The ABI version is unchanged because the change is additive. The manifest has `"partial_output":true`.
+- `dev run` doesn't render partial values. Native mode already shows the JSON as text deltas, and in-place TTY rendering wasn't worth its code.
+- **Tests:**
+  - Unit tests: field order, nested structs, arrays, `stream_strings` growth, escapes and multibyte characters split at every chunk size from 1 to 7, every prefix of an output stays parseable, non-JSON text.
+  - `tests/partial_output_test.zig`: all six combinations of API and mode, with field-wise prefix checks, the last partial equal to the output, a growing summary, one-item arrays and a half-filled nested struct; a reset after a repair; a reset after a retried `final_answer`; `generate`; no partial arms without the flag.
+  - Compile-fail cases: the three listed above.
+- **Cost:**
+  - A 47 KB output in 20-byte deltas produced 802 partial values in 53 ms (ReleaseFast, M-series).
+  - Turning it on for the size suite's full app adds 2.8 KB (1,596,808 → 1,599,608 B).
+- The support example's and the sketch's `TriageAgent` use `.partial_output = true` with `stream_strings = .{.summary}`. Goldens updated.
+- **Not done yet:** the live run per provider (needs keys, N11).
 
 ### 18.5 N11: release v1.2.0
 

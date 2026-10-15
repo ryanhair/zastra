@@ -23,6 +23,7 @@ pub fn json(comptime App: type) []const u8 {
             for (A.mcp_tools, 0..) |set, j| s = s ++ (if (j == 0) "" else ",") ++ str(set.server_name);
             s = s ++ "]";
             if (A.has_output_type) s = s ++ ",\"output_schema\":" ++ json_schema.of(A.Output);
+            if (A.partial_output) s = s ++ ",\"partial_output\":true";
             s = s ++ "}";
         }
         s = s ++ "],\"workflows\":[";

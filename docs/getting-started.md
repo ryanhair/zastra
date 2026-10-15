@@ -117,6 +117,24 @@ const t = try rt.agent(TriageAgent).generate(arena, "My blender arrived smashed"
 // t.output is a Triage
 ```
 
+To show the output while it's generated, add `.partial_output = true`. Streams then include `.output_partial` events, each carrying the whole value so far as a `z.Partial(Triage)` (every field optional):
+
+```zig
+var s = try rt.agent(TriageAgent).stream(arena, "My blender arrived smashed", .{});
+defer s.deinit();
+while (try s.next()) |event| switch (event) {
+    .output_partial => |p| if (p.category) |c| print("category: {t}\n", .{c}),
+    .output_partial_reset => {}, // a repair attempt starts over: discard what you showed
+    else => {},
+};
+const triage = (try s.result()).output; // validated, as with generate
+```
+
+- A field appears once its value is complete. Arrays grow one complete element at a time.
+- String fields listed in `pub const stream_strings = .{.summary};` on the output type also appear while they grow.
+- Partial values aren't validated; the final `output` is.
+- Each value lasts until the next call to `next()`.
+
 To gate a tool behind human approval, declare `pub fn needsApproval(t: *z.ToolCtx(Ctx), in: Input) bool`, or `pub const needs_approval = true`. Tools whose `effects` include `.spends_money` or `.destructive` require approval by default. Then stream:
 
 ```zig

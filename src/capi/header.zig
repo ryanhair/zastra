@@ -60,7 +60,11 @@ pub fn render(comptime App: type, comptime lib: []const u8) []const u8 {
             \\    ZASTRA_EVENT_TOOL_RESULT = 3,
             \\    ZASTRA_EVENT_APPROVAL_REQUEST = 4,
             \\    ZASTRA_EVENT_STEP_FINISH = 5,
-            \\    ZASTRA_EVENT_FINISH = 6
+            \\    ZASTRA_EVENT_FINISH = 6,
+            \\    /* `.partial_output = true` agents: the output so far (unvalidated), and
+            \\     * a marker that earlier partial values were discarded (a repair). */
+            \\    ZASTRA_EVENT_OUTPUT_PARTIAL = 7,
+            \\    ZASTRA_EVENT_OUTPUT_PARTIAL_RESET = 8
             \\} zastra_event_kind;
             \\
             \\/* Pointers stay valid until the next zastra_stream_next() on the same stream.

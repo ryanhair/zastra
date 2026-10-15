@@ -21,6 +21,8 @@ pub fn Step(comptime A: type) type {
         kind: Kind,
         /// Reasoning the model streams before the step's content.
         reasoning: ?[]const u8 = null,
+        /// Stream text and tool arguments in deltas of this many bytes.
+        chunk: usize = 0,
 
         pub const Kind = union(enum) {
             reply: []const u8,
@@ -71,6 +73,14 @@ pub fn Step(comptime A: type) type {
         /// zastra's internal tools (`update_working_memory`, `final_answer`).
         pub fn call(name: []const u8, args_json: []const u8) Self {
             return .{ .kind = .{ .raw_call = .{ .name = name, .args_json = args_json } } };
+        }
+
+        /// `step`, with its text and tool arguments streamed in `n`-byte
+        /// deltas (to test partial output).
+        pub fn chunked(n: usize, step: Self) Self {
+            var s = step;
+            s.chunk = n;
+            return s;
         }
 
         /// The model answers with raw text (e.g. malformed JSON, to test repair).
@@ -125,14 +135,27 @@ pub fn render(comptime A: type, gpa: Allocator, step: Step(A), n: usize) ![]u8 {
         },
     }
     switch (A.model.api) {
-        .anthropic => try anthropic(w, step.reasoning, b.text, b.tools, n),
-        .openai_responses => try responses(w, step.reasoning, b.text, b.tools, n),
-        .openai_compat => try openai(w, step.reasoning, b.text, b.tools, n),
+        .anthropic => try anthropic(w, step.reasoning, b.text, b.tools, n, step.chunk),
+        .openai_responses => try responses(w, step.reasoning, b.text, b.tools, n, step.chunk),
+        .openai_compat => try openai(w, step.reasoning, b.text, b.tools, n, step.chunk),
     }
     return aw.toOwnedSlice();
 }
 
 const Tool = struct { name: []const u8, args: []const u8 };
+
+/// `s` split into `chunk`-byte pieces (one piece when `chunk` is 0).
+const Pieces = struct {
+    s: []const u8,
+    chunk: usize,
+    i: usize = 0,
+    fn next(p: *Pieces) ?[]const u8 {
+        if (p.i >= p.s.len and !(p.i == 0 and p.s.len == 0)) return null;
+        const n = if (p.chunk == 0) p.s.len else @min(p.chunk, p.s.len - p.i);
+        defer p.i += @max(n, 1);
+        return p.s[p.i .. p.i + n];
+    }
+};
 
 fn data(w: *Writer, event: ?[]const u8, comptime fmt: []const u8, args: anytype) !void {
     if (event) |e| try w.print("event: {s}\n", .{e});
@@ -141,7 +164,7 @@ fn data(w: *Writer, event: ?[]const u8, comptime fmt: []const u8, args: anytype)
     try w.writeAll("\n\n");
 }
 
-fn anthropic(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize) !void {
+fn anthropic(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize, chunk: usize) !void {
     try data(w, "message_start", "{{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_scripted_{d}\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{{\"input_tokens\":10,\"output_tokens\":1}}}}}}", .{n});
     var idx: usize = 0;
     if (reasoning) |r| {
@@ -155,9 +178,12 @@ fn anthropic(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []con
     }
     if (text) |t| {
         try data(w, "content_block_start", "{{\"type\":\"content_block_start\",\"index\":{d},\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}", .{idx});
-        try w.print("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{d},\"delta\":{{\"type\":\"text_delta\",\"text\":", .{idx});
-        try json.writeString(t, w);
-        try w.writeAll("}}\n\n");
+        var ps: Pieces = .{ .s = t, .chunk = chunk };
+        while (ps.next()) |piece| {
+            try w.print("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{d},\"delta\":{{\"type\":\"text_delta\",\"text\":", .{idx});
+            try json.writeString(piece, w);
+            try w.writeAll("}}\n\n");
+        }
         try data(w, "content_block_stop", "{{\"type\":\"content_block_stop\",\"index\":{d}}}", .{idx});
         idx += 1;
     }
@@ -165,9 +191,12 @@ fn anthropic(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []con
         try w.print("event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":{d},\"content_block\":{{\"type\":\"tool_use\",\"id\":\"toolu_scripted_{d}_{d}\",\"name\":", .{ idx, n, i });
         try json.writeString(t.name, w);
         try w.writeAll(",\"input\":{}}}\n\n");
-        try w.print("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{d},\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":", .{idx});
-        try json.writeString(t.args, w);
-        try w.writeAll("}}\n\n");
+        var ps: Pieces = .{ .s = t.args, .chunk = chunk };
+        while (ps.next()) |piece| {
+            try w.print("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{d},\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":", .{idx});
+            try json.writeString(piece, w);
+            try w.writeAll("}}\n\n");
+        }
         try data(w, "content_block_stop", "{{\"type\":\"content_block_stop\",\"index\":{d}}}", .{idx});
         idx += 1;
     }
@@ -175,7 +204,7 @@ fn anthropic(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []con
     try data(w, "message_stop", "{{\"type\":\"message_stop\"}}", .{});
 }
 
-fn openai(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize) !void {
+fn openai(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize, chunk: usize) !void {
     _ = n;
     if (reasoning) |r| {
         try w.writeAll("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":");
@@ -183,23 +212,34 @@ fn openai(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const 
         try w.writeAll("},\"finish_reason\":null}]}\n\n");
     }
     if (text) |t| {
-        try w.writeAll("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":");
-        try json.writeString(t, w);
-        try w.writeAll("},\"finish_reason\":null}]}\n\n");
+        var ps: Pieces = .{ .s = t, .chunk = chunk };
+        while (ps.next()) |piece| {
+            try w.writeAll("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":");
+            try json.writeString(piece, w);
+            try w.writeAll("},\"finish_reason\":null}]}\n\n");
+        }
     }
     for (tools, 0..) |t, i| {
-        try w.print("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{d},\"id\":\"call_scripted_{d}\",\"type\":\"function\",\"function\":{{\"name\":", .{ i, i });
-        try json.writeString(t.name, w);
-        try w.writeAll(",\"arguments\":");
-        try json.writeString(t.args, w);
-        try w.writeAll("}}]},\"finish_reason\":null}]}\n\n");
+        var ps: Pieces = .{ .s = t.args, .chunk = chunk };
+        var first = true;
+        while (ps.next()) |piece| : (first = false) {
+            if (first) {
+                try w.print("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{d},\"id\":\"call_scripted_{d}\",\"type\":\"function\",\"function\":{{\"name\":", .{ i, i });
+                try json.writeString(t.name, w);
+                try w.writeAll(",\"arguments\":");
+            } else {
+                try w.print("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{d},\"function\":{{\"arguments\":", .{i});
+            }
+            try json.writeString(piece, w);
+            try w.writeAll("}}]},\"finish_reason\":null}]}\n\n");
+        }
     }
     try w.print("data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"{s}\"}}]}}\n\n", .{if (tools.len > 0) "tool_calls" else "stop"});
     try w.writeAll("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n");
     try w.writeAll("data: [DONE]\n\n");
 }
 
-fn responses(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize) !void {
+fn responses(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize, chunk: usize) !void {
     try data(w, "response.created", "{{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_scripted_{d}\",\"status\":\"in_progress\",\"output\":[]}}}}", .{n});
     var idx: usize = 0;
     if (reasoning) |r| {
@@ -213,9 +253,12 @@ fn responses(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []con
     }
     if (text) |t| {
         try data(w, "response.output_item.added", "{{\"type\":\"response.output_item.added\",\"output_index\":{d},\"item\":{{\"id\":\"msg_scripted_{d}\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}}}", .{ idx, n });
-        try w.print("event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"output_index\":{d},\"content_index\":0,\"delta\":", .{idx});
-        try json.writeString(t, w);
-        try w.writeAll("}\n\n");
+        var ps: Pieces = .{ .s = t, .chunk = chunk };
+        while (ps.next()) |piece| {
+            try w.print("event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"output_index\":{d},\"content_index\":0,\"delta\":", .{idx});
+            try json.writeString(piece, w);
+            try w.writeAll("}\n\n");
+        }
         try data(w, "response.output_item.done", "{{\"type\":\"response.output_item.done\",\"output_index\":{d},\"item\":{{\"type\":\"message\"}}}}", .{idx});
         idx += 1;
     }
@@ -223,9 +266,12 @@ fn responses(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []con
         try w.print("event: response.output_item.added\ndata: {{\"type\":\"response.output_item.added\",\"output_index\":{d},\"item\":{{\"type\":\"function_call\",\"call_id\":\"call_scripted_{d}_{d}\",\"arguments\":\"\",\"name\":", .{ idx, n, i });
         try json.writeString(t.name, w);
         try w.writeAll("}}\n\n");
-        try w.print("event: response.function_call_arguments.delta\ndata: {{\"type\":\"response.function_call_arguments.delta\",\"output_index\":{d},\"delta\":", .{idx});
-        try json.writeString(t.args, w);
-        try w.writeAll("}\n\n");
+        var ps: Pieces = .{ .s = t.args, .chunk = chunk };
+        while (ps.next()) |piece| {
+            try w.print("event: response.function_call_arguments.delta\ndata: {{\"type\":\"response.function_call_arguments.delta\",\"output_index\":{d},\"delta\":", .{idx});
+            try json.writeString(piece, w);
+            try w.writeAll("}\n\n");
+        }
         try data(w, "response.output_item.done", "{{\"type\":\"response.output_item.done\",\"output_index\":{d},\"item\":{{\"type\":\"function_call\"}}}}", .{idx});
         idx += 1;
     }

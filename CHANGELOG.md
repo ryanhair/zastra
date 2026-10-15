@@ -3,6 +3,8 @@
 ## Unreleased (v1.2.0)
 
 ### Added
+- **Partial structured output:** `.partial_output = true` on an agent with `.output` adds `.output_partial` events (the value so far as `z.Partial(T)`) and `.output_partial_reset`. Fields listed in `pub const stream_strings` stream as they grow. C ABI event kinds 7 and 8 (D43, D44).
+- `z.testing` scripts can stream in small deltas: `.chunked(n, step)`.
 - **`z.step.loop(Body, .{ .until, .max, .on_limit })`:** repeat a step, parallel group or workflow until a predicate holds, with a required bound. Iterations are saved and resume like steps, and gated agents inside a loop keep one saved run per iteration (D45, D46).
 - **Working-memory migrations:** `pub const migrations = .{ z.migrate(OldNotes, f) }` on the working-memory type converts values saved with older shapes instead of resetting them. Migrations chain, and they also apply when resuming saved agent runs (D48).
 
@@ -11,6 +13,7 @@
 - The agent run error set gains `MigrationFailed`.
 
 ### Fixed
+- Chat Completions (`openai_compat`) streams dropped the first argument bytes of a tool call from the event stream when one chunk started the call and carried arguments. The final message was unaffected.
 - Two parallel branches failing at the same moment raced on the run's failure fields and arena.
 - A step canceled mid-run was retried under its `z.Retry` policy; cancellation is no longer retried.
 

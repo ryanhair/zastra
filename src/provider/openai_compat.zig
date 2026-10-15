@@ -201,6 +201,18 @@ pub const Stream = struct {
     started_text: bool = false,
     started_reasoning: bool = false,
     tool_ids: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// Events from one chunk after the first, returned by the next calls
+    /// (a chunk can start a tool call and carry its first arguments).
+    pending: [16]p.Event = undefined,
+    pending_len: usize = 0,
+    pending_pos: usize = 0,
+
+    fn add(s: *Stream, e: p.Event) void {
+        if (s.pending_len < s.pending.len) {
+            s.pending[s.pending_len] = e;
+            s.pending_len += 1;
+        }
+    }
 
     pub fn open(arena: Allocator, h: *http.Http, req: p.Request) p.Error!Stream {
         var aw: Writer.Allocating = .init(arena);
@@ -247,9 +259,15 @@ pub const Stream = struct {
     }
 
     pub fn next(s: *Stream) p.Error!?p.Event {
+        if (s.pending_pos < s.pending_len) {
+            defer s.pending_pos += 1;
+            return s.pending[s.pending_pos];
+        }
         if (s.done) return null;
         while (true) {
             _ = s.scratch.reset(.retain_capacity);
+            s.pending_len = 0;
+            s.pending_pos = 0;
             const ev = s.events.next() catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return p.bodyReadError(s.res, s.diag),
@@ -282,16 +300,15 @@ pub const Stream = struct {
             const d = c.object.get("delta") orelse continue;
             if (d != .object) continue;
 
-            // A chunk can carry several things; emit the first and buffer the
-            // rest into the builder (deltas for tools are rarely mixed).
-            var out: ?p.Event = null;
+            // A chunk can carry several things: return the first event now and
+            // the rest from the next calls.
             if (p.getStr(d, "reasoning_content") orelse p.getStr(d, "reasoning")) |r| if (r.len > 0) {
                 if (!s.started_reasoning) {
                     try s.builder.startReasoning(reasoning_index, null);
                     s.started_reasoning = true;
                 }
                 try s.builder.append(reasoning_index, r);
-                out = out orelse p.Event{ .delta = .{ .reasoning = r } };
+                s.add(.{ .delta = .{ .reasoning = r } });
             };
             if (p.getStr(d, "content")) |t| if (t.len > 0) {
                 if (!s.started_text) {
@@ -299,7 +316,7 @@ pub const Stream = struct {
                     s.started_text = true;
                 }
                 try s.builder.append(text_index, t);
-                out = out orelse p.Event{ .delta = .{ .text = t } };
+                s.add(.{ .delta = .{ .text = t } });
             };
             if (d.object.get("tool_calls")) |tcs| if (tcs == .array) for (tcs.array.items) |tc| {
                 const idx: u32 = @intCast(p.getInt(tc, "index") orelse 0);
@@ -309,14 +326,17 @@ pub const Stream = struct {
                     const fname = if (f) |ff| p.getStr(ff, "name") orelse "" else "";
                     try s.builder.startToolUse(idx, if (id.len > 0) id else try std.fmt.allocPrint(s.arena, "call_{d}", .{idx}), fname);
                     s.tool_ids.put(s.arena, idx, {}) catch return error.OutOfMemory;
-                    out = out orelse p.Event{ .delta = .{ .tool_call_start = .{ .index = idx, .id = id, .name = fname } } };
+                    s.add(.{ .delta = .{ .tool_call_start = .{ .index = idx, .id = id, .name = fname } } });
                 }
                 if (f) |ff| if (p.getStr(ff, "arguments")) |args| if (args.len > 0) {
                     try s.builder.append(idx, args);
-                    out = out orelse p.Event{ .delta = .{ .tool_call_args = .{ .index = idx, .json = args } } };
+                    s.add(.{ .delta = .{ .tool_call_args = .{ .index = idx, .json = args } } });
                 };
             };
-            if (out) |e| return e;
+            if (s.pending_len > 0) {
+                s.pending_pos = 1;
+                return s.pending[0];
+            }
         }
     }
 };

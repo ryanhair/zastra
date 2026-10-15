@@ -153,6 +153,7 @@ test {
     _ = @import("meta/make.zig");
     _ = @import("schema/partial.zig");
     _ = @import("schema/migrate.zig");
+    _ = @import("schema/stream_parse.zig");
     _ = @import("schema/comptime_json.zig");
     _ = @import("storage/memory_store.zig");
     _ = @import("storage/sqlite.zig");

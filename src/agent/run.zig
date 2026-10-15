@@ -13,6 +13,7 @@ const parse = @import("../schema/parse.zig");
 const json = @import("../schema/json.zig");
 const partial = @import("../schema/partial.zig");
 const migrate = @import("../schema/migrate.zig");
+const stream_parse = @import("../schema/stream_parse.zig");
 const fingerprint = @import("../meta/fingerprint.zig");
 const trace = @import("../trace/trace.zig");
 const ToolCtx = @import("../context.zig").ToolCtx;
@@ -300,6 +301,17 @@ pub fn Stream(comptime A: type) type {
         /// refreshed later apply to the next run).
         prefix: provider.Prefix = A.prefix,
         created_at: i64 = 0,
+        /// Partial output (D43). A single field, void without
+        /// `.partial_output`, so other agents are byte-for-byte unchanged.
+        partial: if (A.partial_output) PartialState else void = undefined,
+
+        const PartialState = struct {
+            parser: stream_parse.Parser(A.Output),
+            /// Off for `generate`, which never shows partial values.
+            on: bool = true,
+            /// The `final_answer` call's index in the current turn.
+            final_index: ?u32 = null,
+        };
 
         const tag_headers = [_][2][]const u8{.{ "x-zastra-agent", A.id }};
 
@@ -316,6 +328,7 @@ pub fn Stream(comptime A: type) type {
                 .created_at = st.nowMs(),
                 .persisted = opts.keep_result,
             };
+            if (A.partial_output) s.partial = .{ .parser = .init(st.gpa) };
             s.run_span = st.tracer.begin(.agent_run, A.id, s.trace_id, opts.trace_parent);
             s.run_span.attr("agent", A.id);
             s.run_span.attr("run_id", s.run_id);
@@ -564,6 +577,7 @@ pub fn Stream(comptime A: type) type {
         }
 
         pub fn deinit(s: *Self) void {
+            if (A.partial_output) s.partial.parser.deinit();
             if (s.pstream) |*ps| ps.close();
             s.pstream = null;
             s.freeCallArenas();
@@ -608,11 +622,25 @@ pub fn Stream(comptime A: type) type {
                         const e = (try s.pstream.?.next()) orelse return error.StreamInterrupted;
                         switch (e) {
                             .delta => |d| switch (d) {
-                                .text => |t| if (t.len > 0) return @unionInit(A.Event, "text_delta", t),
+                                .text => |t| if (t.len > 0) {
+                                    if (comptime A.partial_output and A.native_structured_output) if (s.partial.on) if (try s.partial.parser.feed(t)) |v| {
+                                        try s.push(@unionInit(A.Event, "text_delta", t));
+                                        try s.push(@unionInit(A.Event, "output_partial", v));
+                                        continue;
+                                    };
+                                    return @unionInit(A.Event, "text_delta", t);
+                                },
                                 // Without `.show_reasoning` the text is dropped here; the
                                 // block itself still goes back to the provider.
                                 .reasoning => |t| if (A.show_reasoning and t.len > 0) return @unionInit(A.Event, "reasoning_delta", t),
-                                else => {},
+                                else => if (comptime A.partial_output and !A.native_structured_output) if (s.partial.on) switch (d) {
+                                    // The `final_answer` call's arguments are the output.
+                                    .tool_call_start => |c| if (std.mem.eql(u8, c.name, agent_mod.final_answer_tool)) {
+                                        s.partial.final_index = c.index;
+                                    },
+                                    .tool_call_args => |c| if (s.partial.final_index == c.index) if (try s.partial.parser.feed(c.json)) |v| return @unionInit(A.Event, "output_partial", v),
+                                    else => {},
+                                },
                             },
                             .finish => |f| try s.onModelFinish(f),
                         }
@@ -774,6 +802,13 @@ pub fn Stream(comptime A: type) type {
             if (A.reasoning_budget) |budget| if (max_tokens <= budget) {
                 s.diag.print(0, "agent '{s}': max_tokens {d} must be greater than the reasoning budget ({d}); the budget counts toward it", .{ A.id, max_tokens, budget });
                 return error.BadRequest;
+            };
+            if (comptime A.partial_output) if (s.partial.on) {
+                // Partial values from an earlier turn (a repair, a retried
+                // final_answer, JSON before tool calls) didn't become the output.
+                if (s.partial.parser.produced()) try s.push(@unionInit(A.Event, "output_partial_reset", {}));
+                s.partial.parser.reset();
+                s.partial.final_index = null;
             };
             s.step_span = s.st.tracer.begin(.agent_step, A.id, s.trace_id, &s.run_span);
             s.step_span.attr("step", s.step);
@@ -1142,6 +1177,7 @@ pub fn Stream(comptime A: type) type {
 pub fn generate(comptime A: type, st: *runtime.State, arena: Allocator, input: []const Message, opts: Options(A)) Error!Result(A) {
     const s = try Stream(A).init(st, arena, input, opts);
     defer s.deinit();
+    if (A.partial_output) s.partial.on = false;
     return drive(A, s, opts);
 }
 
