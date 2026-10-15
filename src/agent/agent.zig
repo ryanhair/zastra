@@ -20,7 +20,7 @@ const ev = @import("events.zig");
 pub const known_config = [_][]const u8{
     "name",        "model",    "instructions", "tools",            "output",   "memory",
     "max_steps",   "max_tokens", "temperature", "effort",          "provider_options", "examples",
-    "allow",       "description",
+    "allow",       "description", "reasoning",   "show_reasoning",
 };
 
 const known_memory = [_][]const u8{ "history", "working" };
@@ -134,6 +134,8 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             break :blk std.meta.stringToEnum(provider.Effort, tag) orelse errors.fail("{s}: unknown `.effort = .{s}`{s}", .{ who, tag, errors.didYouMean(tag, reflect.fieldNames(provider.Effort)) });
         } else null;
 
+        const reasoning = resolveReasoning(cfg, spec, who, effort, temperature, max_tokens);
+
         // ── instructions & examples (§5.10) ──────────────────────────────
         var system: []const u8 = if (@hasField(C, "instructions")) cfg.instructions else "";
         if (@hasField(C, "examples")) {
@@ -193,6 +195,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             .output = if (native_output) .{ .name = reflect.snakeCase(reflect.shortTypeName(Output_)), .schema = json_schema.render(Output_, output_dialect) } else null,
             .temperature = temperature,
             .effort = effort,
+            .reasoning = reasoning.request,
             .extra = if (@hasField(C, "provider_options")) cfg.provider_options else null,
             .dynamic_tools = mcp_sets.len > 0,
         };
@@ -218,8 +221,12 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
         const ToolCall_ = make.TaggedUnion(call_names, call_types);
         const ApprovalCall_ = make.TaggedUnion(appr_names, appr_types);
 
-        var ev_names: []const []const u8 = &.{ "text_delta", "reasoning_delta" };
-        var ev_types: []const type = &.{ []const u8, []const u8 };
+        var ev_names: []const []const u8 = &.{"text_delta"};
+        var ev_types: []const type = &.{[]const u8};
+        if (reasoning.show) {
+            ev_names = ev_names ++ &[_][]const u8{"reasoning_delta"};
+            ev_types = ev_types ++ &[_]type{[]const u8};
+        }
         if (has_tools) {
             ev_names = ev_names ++ &[_][]const u8{ "tool_call", "tool_result" };
             ev_types = ev_types ++ &[_]type{ ToolCall_, ev.ToolResult };
@@ -271,7 +278,83 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             pub const ApprovalCall = ApprovalCall_;
             pub const has_approvals = has_approvals_;
             pub const has_tool_events = has_tools;
+            /// `.reasoning_delta` events are emitted (`.show_reasoning = true`).
+            pub const show_reasoning = reasoning.show;
+            /// `.reasoning = .{ .budget = N }`: N, which a per-run `max_tokens` must exceed.
+            pub const reasoning_budget: ?u32 = if (reasoning.request) |r| switch (r) {
+                .budget => |n| n,
+                else => null,
+            } else null;
             pub const Event = Event_;
         };
+    }
+}
+
+const ReasoningMode = union(enum) { default, on, off, budget: u32 };
+
+/// `.reasoning` and `.show_reasoning`, checked against the model's
+/// capabilities and turned into request settings (PLAN.md D37).
+fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime who: []const u8, comptime effort: ?provider.Effort, comptime temperature: ?f64, comptime max_tokens: u32) struct { request: ?provider.Reasoning, show: bool } {
+    comptime {
+        const C = @TypeOf(cfg);
+        const name = spec.fullName();
+        const modes = spec.supports.reasoning_modes;
+        const anthropic = spec.api == .anthropic;
+
+        const mode: ReasoningMode = if (!@hasField(C, "reasoning")) .default else blk: {
+            const R = @TypeOf(cfg.reasoning);
+            if (R == @EnumLiteral()) {
+                const tag = @tagName(cfg.reasoning);
+                if (std.mem.eql(u8, tag, "default")) break :blk .default;
+                if (std.mem.eql(u8, tag, "on")) break :blk .on;
+                if (std.mem.eql(u8, tag, "off")) break :blk .off;
+                errors.fail("{s}: unknown `.reasoning = .{s}`{s}; use `.default`, `.on`, `.off` or `.{{ .budget = N }}`", .{ who, tag, errors.didYouMean(tag, &.{ "default", "on", "off", "budget" }) });
+            }
+            if (@typeInfo(R) == .@"struct" and std.meta.fields(R).len == 1 and @hasField(R, "budget"))
+                break :blk .{ .budget = cfg.reasoning.budget };
+            errors.fail("{s}: `.reasoning` must be `.default`, `.on`, `.off` or `.{{ .budget = N }}`", .{who});
+        };
+        const show: bool = if (@hasField(C, "show_reasoning")) cfg.show_reasoning else false;
+
+        if (mode != .default or show) {
+            if (!spec.supports.reasoning)
+                errors.fail("{s}: model \"{s}\" doesn't reason; remove `.reasoning` and `.show_reasoning`", .{ who, name });
+            if (@hasField(C, "provider_options") and std.mem.indexOf(u8, cfg.provider_options, "\"thinking\"") != null)
+                errors.fail("{s}: set reasoning with `.reasoning` or with `\"thinking\"` in `.provider_options`, not both", .{who});
+        }
+        if (show and !modes.visible) errors.fail("{s}: model \"{s}\" doesn't return readable reasoning{s}; remove `.show_reasoning`", .{
+            who, name, if (spec.api == .openai_compat and spec.supports.reasoning) " through Chat Completions (summaries arrive with the Responses API, PLAN.md §17.2)" else "",
+        });
+
+        const request: ?provider.Reasoning = switch (mode) {
+            .default => if (!show) null else if (!modes.default_on)
+                errors.fail("{s}: model \"{s}\" doesn't reason unless asked; add `.reasoning = .on` to use `.show_reasoning`", .{ who, name })
+            else if (modes.display_param) .{ .adaptive = .{ .summarized = true } } else null,
+            .on => if (!anthropic)
+                (if (modes.default_on) null else errors.fail("{s}: zastra can't turn reasoning on for model \"{s}\"; it reasons by default or not at all", .{ who, name }))
+            else if (modes.adaptive) .{ .adaptive = .{ .summarized = show and modes.display_param } }
+            else if (modes.budget)
+                errors.fail("{s}: model \"{s}\" needs a reasoning budget; use `.reasoning = .{{ .budget = 4_000 }}` (tokens, less than `.max_tokens`)", .{ who, name })
+            else errors.fail("{s}: zastra can't turn reasoning on for model \"{s}\"", .{ who, name }),
+            .off => blk: {
+                if (show) errors.fail("{s}: `.show_reasoning = true` with `.reasoning = .off`; remove one of them", .{who});
+                if (!anthropic or !modes.disable)
+                    errors.fail("{s}: model \"{s}\" can't turn reasoning off; remove `.reasoning = .off` (use `.effort = .low` to make it cheaper and faster)", .{ who, name });
+                if (modes.disable_only_up_to_high) if (effort) |e| if (e == .xhigh or e == .max)
+                    errors.fail("{s}: model \"{s}\" can only turn reasoning off at effort `high` or below; got `.effort = .{s}`", .{ who, name, @tagName(e) });
+                break :blk .disabled;
+            },
+            .budget => |n| blk: {
+                if (!anthropic or !modes.budget) errors.fail("{s}: model \"{s}\" doesn't take a reasoning budget; use `.reasoning = .on`{s}", .{
+                    who, name, if (anthropic) " (it decides how much to think; `.effort` steers it)" else "",
+                });
+                if (n < 1024) errors.fail("{s}: `.reasoning = .{{ .budget = {d} }}` is below the minimum of 1024 tokens", .{ who, n });
+                if (n >= max_tokens) errors.fail("{s}: `.reasoning = .{{ .budget = {d} }}` must be less than `.max_tokens` ({d}); the budget counts toward it", .{ who, n, max_tokens });
+                break :blk .{ .budget = n };
+            },
+        };
+        if (anthropic and temperature != null and (mode == .on or mode == .budget))
+            errors.fail("{s}: `.temperature` can't be combined with reasoning; remove one of them", .{who});
+        return .{ .request = request, .show = show };
     }
 }

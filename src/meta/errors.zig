@@ -33,15 +33,26 @@ pub fn closest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
     @setEvalBranchQuota(100_000);
     var best: ?[]const u8 = null;
     var best_d: usize = 3;
+    var best_prefix: usize = 0;
     for (candidates) |c| {
         if (std.mem.eql(u8, c, name)) continue;
         const d = editDistance(name, c);
-        if (d < best_d) {
+        // Ties go to the candidate sharing the longest prefix: people
+        // usually get the start of a word right ("of" means "off", not "on").
+        const prefix = commonPrefix(name, c);
+        if (d < best_d or (d == best_d and best != null and prefix > best_prefix)) {
             best_d = d;
             best = c;
+            best_prefix = prefix;
         }
     }
     return best;
+}
+
+fn commonPrefix(a: []const u8, b: []const u8) usize {
+    var i: usize = 0;
+    while (i < a.len and i < b.len and a[i] == b[i]) i += 1;
+    return i;
 }
 
 /// " (did you mean 'x'?)" or "" — for appending to a message.

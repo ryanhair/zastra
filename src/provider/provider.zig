@@ -44,6 +44,16 @@ pub const OutputFormat = struct {
 
 pub const Effort = enum { low, medium, high, xhigh, max };
 
+/// Reasoning settings resolved at comptime from an agent's `.reasoning` and
+/// `.show_reasoning` against the model's capabilities (PLAN.md D37).
+pub const Reasoning = union(enum) {
+    /// Anthropic `{type:"adaptive"}`; `summarized` adds `display: "summarized"`.
+    adaptive: struct { summarized: bool = false },
+    /// Anthropic `{type:"enabled", budget_tokens: N}`.
+    budget: u32,
+    disabled,
+};
+
 /// Everything static about a request.
 pub const PrefixParts = struct {
     spec: catalog.Spec,
@@ -52,6 +62,7 @@ pub const PrefixParts = struct {
     output: ?OutputFormat = null,
     temperature: ?f64 = null,
     effort: ?Effort = null,
+    reasoning: ?Reasoning = null,
     /// Raw JSON object members appended verbatim, e.g.
     /// `"thinking":{"type":"adaptive","display":"summarized"}`.
     extra: ?[]const u8 = null,

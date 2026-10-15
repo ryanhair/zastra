@@ -29,7 +29,7 @@ while (try stream.next()) |event| switch (event) {
   error: zastra: tool 'IssueRefund' declares `needApproval`; did you mean `needsApproval`?
   ```
 - **Two providers.** Anthropic Messages and OpenAI-compatible Chat Completions; the second also covers OpenRouter, Groq, Together, Ollama and vLLM through `z.custom(...)`. Model capabilities and pricing come from a catalog, so `usage.cost_usd` is computed for you.
-- **Agents.** `generate` and `stream`, a multi-step tool loop with parallel tool calls, typed structured output (native JSON-schema mode or a `final_answer` tool, with one repair attempt), human approval, and memory: history plus typed working memory.
+- **Agents.** `generate` and `stream`, a multi-step tool loop with parallel tool calls, typed structured output (native JSON-schema mode or a `final_answer` tool, with one repair attempt), reasoning control checked per model (`.reasoning`, `.show_reasoning`), human approval, and memory: history plus typed working memory.
 - **Workflows.** `.then`, `.branch`, `z.step.parallel`, nested workflows, typed `needs`, retries and timeouts, plus suspend/resume that survives restarts. A structural fingerprint catches incompatible snapshots, and `.migration(...)` handles old ones.
 - **MCP client** over stdio. Arguments are validated against each server's schema.
 - **Tracing** as JSON lines, and a dev CLI that prints a run as a tree.

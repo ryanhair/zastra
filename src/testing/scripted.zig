@@ -15,52 +15,66 @@ pub const max_calls_per_step = 8;
 pub fn Step(comptime A: type) type {
     const has_calls = @typeInfo(A.ToolCall).@"union".fields.len > 0;
     const Calls = if (has_calls) struct { buf: [max_calls_per_step]A.ToolCall = undefined, len: usize = 0 } else void;
-    return union(enum) {
+    return struct {
         const Self = @This();
 
-        reply: []const u8,
-        calls: Calls,
-        output_value: A.Output,
-        raw_text: []const u8,
-        raw_call: struct { name: []const u8, args_json: []const u8 },
+        kind: Kind,
+        /// Reasoning the model streams before the step's content.
+        reasoning: ?[]const u8 = null,
+
+        pub const Kind = union(enum) {
+            reply: []const u8,
+            calls: Calls,
+            output_value: A.Output,
+            raw_text: []const u8,
+            raw_call: struct { name: []const u8, args_json: []const u8 },
+        };
 
         /// The model answers with text.
         pub fn text(t: []const u8) Self {
-            return .{ .reply = t };
+            return .{ .kind = .{ .reply = t } };
+        }
+
+        /// `step`, preceded by reasoning (Anthropic thinking with a signature,
+        /// or `reasoning_content` on OpenAI-compatible servers).
+        pub fn withReasoning(r: []const u8, step: Self) Self {
+            var s = step;
+            s.reasoning = r;
+            return s;
         }
 
         /// The model calls tool `T` with `input`. The input is typed against
         /// the tool, so a wrong argument fails to compile.
         pub fn tool(comptime T: type, input: T.Input) Self {
             const name = comptime toolName(T);
-            var s: Self = .{ .calls = .{} };
-            s.calls.buf[0] = @unionInit(A.ToolCall, name, input);
-            s.calls.len = 1;
+            var s: Self = .{ .kind = .{ .calls = .{} } };
+            s.kind.calls.buf[0] = @unionInit(A.ToolCall, name, input);
+            s.kind.calls.len = 1;
             return s;
         }
 
         /// Several tool calls in one turn (parallel tool use).
         pub fn tools(calls: []const A.ToolCall) Self {
-            var s: Self = .{ .calls = .{} };
-            for (calls, 0..) |c, i| s.calls.buf[i] = c;
-            s.calls.len = calls.len;
+            var s: Self = .{ .kind = .{ .calls = .{} } };
+            for (calls, 0..) |c, i| s.kind.calls.buf[i] = c;
+            s.kind.calls.len = calls.len;
             return s;
         }
 
         /// The model produces the agent's typed output.
         pub fn output(v: A.Output) Self {
-            return .{ .output_value = v };
+            return .{ .kind = .{ .output_value = v } };
         }
 
         /// The model calls a tool by name with raw JSON arguments, including
         /// zastra's internal tools (`update_working_memory`, `final_answer`).
         pub fn call(name: []const u8, args_json: []const u8) Self {
-            return .{ .raw_call = .{ .name = name, .args_json = args_json } };
+            return .{ .kind = .{ .raw_call = .{ .name = name, .args_json = args_json } } };
         }
 
         /// The model answers with raw text (e.g. malformed JSON, to test repair).
         pub fn raw(t: []const u8) Self {
-            return .{ .raw_text = t };
+            return .{ .kind = .{ .raw_text = t } };
         }
 
         fn toolName(comptime T: type) []const u8 {
@@ -81,7 +95,7 @@ pub fn render(comptime A: type, gpa: Allocator, step: Step(A), n: usize) ![]u8 {
     const Blocks = struct { text: ?[]const u8 = null, tools: []const Tool = &.{} };
     var tool_buf: [max_calls_per_step]Tool = undefined;
     var b: Blocks = .{};
-    switch (step) {
+    switch (step.kind) {
         .reply, .raw_text => |t| b.text = t,
         .raw_call => |c| {
             tool_buf[0] = .{ .name = c.name, .args = c.args_json };
@@ -110,8 +124,8 @@ pub fn render(comptime A: type, gpa: Allocator, step: Step(A), n: usize) ![]u8 {
         },
     }
     switch (A.model.api) {
-        .anthropic => try anthropic(w, b.text, b.tools, n),
-        .openai_compat => try openai(w, b.text, b.tools, n),
+        .anthropic => try anthropic(w, step.reasoning, b.text, b.tools, n),
+        .openai_compat => try openai(w, step.reasoning, b.text, b.tools, n),
     }
     return aw.toOwnedSlice();
 }
@@ -125,9 +139,18 @@ fn data(w: *Writer, event: ?[]const u8, comptime fmt: []const u8, args: anytype)
     try w.writeAll("\n\n");
 }
 
-fn anthropic(w: *Writer, text: ?[]const u8, tools: []const Tool, n: usize) !void {
+fn anthropic(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize) !void {
     try data(w, "message_start", "{{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_scripted_{d}\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{{\"input_tokens\":10,\"output_tokens\":1}}}}}}", .{n});
     var idx: usize = 0;
+    if (reasoning) |r| {
+        try data(w, "content_block_start", "{{\"type\":\"content_block_start\",\"index\":{d},\"content_block\":{{\"type\":\"thinking\",\"thinking\":\"\"}}}}", .{idx});
+        try w.print("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{d},\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":", .{idx});
+        try json.writeString(r, w);
+        try w.writeAll("}}\n\n");
+        try data(w, "content_block_delta", "{{\"type\":\"content_block_delta\",\"index\":{d},\"delta\":{{\"type\":\"signature_delta\",\"signature\":\"sig_scripted_{d}\"}}}}", .{ idx, n });
+        try data(w, "content_block_stop", "{{\"type\":\"content_block_stop\",\"index\":{d}}}", .{idx});
+        idx += 1;
+    }
     if (text) |t| {
         try data(w, "content_block_start", "{{\"type\":\"content_block_start\",\"index\":{d},\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}", .{idx});
         try w.print("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{d},\"delta\":{{\"type\":\"text_delta\",\"text\":", .{idx});
@@ -150,8 +173,13 @@ fn anthropic(w: *Writer, text: ?[]const u8, tools: []const Tool, n: usize) !void
     try data(w, "message_stop", "{{\"type\":\"message_stop\"}}", .{});
 }
 
-fn openai(w: *Writer, text: ?[]const u8, tools: []const Tool, n: usize) !void {
+fn openai(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize) !void {
     _ = n;
+    if (reasoning) |r| {
+        try w.writeAll("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":");
+        try json.writeString(r, w);
+        try w.writeAll("},\"finish_reason\":null}]}\n\n");
+    }
     if (text) |t| {
         try w.writeAll("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":");
         try json.writeString(t, w);

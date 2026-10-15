@@ -1,0 +1,30 @@
+sonnet46_default:
+{"model":"claude-sonnet-4-6","stream":true,"cache_control":{"type":"ephemeral"}
+
+sonnet46_on (reasoning_delta):
+{"model":"claude-sonnet-4-6","stream":true,"thinking":{"type":"adaptive"},"cache_control":{"type":"ephemeral"}
+
+sonnet46_budget:
+{"model":"claude-sonnet-4-6","stream":true,"thinking":{"type":"enabled","budget_tokens":4000},"cache_control":{"type":"ephemeral"}
+
+sonnet46_off:
+{"model":"claude-sonnet-4-6","stream":true,"thinking":{"type":"disabled"},"cache_control":{"type":"ephemeral"}
+
+sonnet55_default:
+{"model":"claude-sonnet-5-5","stream":true,"cache_control":{"type":"ephemeral"}
+
+sonnet55_show (reasoning_delta):
+{"model":"claude-sonnet-5-5","stream":true,"thinking":{"type":"adaptive","display":"summarized"},"cache_control":{"type":"ephemeral"}
+
+sonnet55_on:
+{"model":"claude-sonnet-5-5","stream":true,"output_config":{"effort":"high"},"thinking":{"type":"adaptive"},"cache_control":{"type":"ephemeral"}
+
+sonnet5_off:
+{"model":"claude-sonnet-5","stream":true,"output_config":{"effort":"high"},"thinking":{"type":"disabled"},"cache_control":{"type":"ephemeral"}
+
+haiku45_budget (reasoning_delta):
+{"model":"claude-haiku-4-5","stream":true,"thinking":{"type":"enabled","budget_tokens":2048},"cache_control":{"type":"ephemeral"}
+
+gpt5mini_on:
+{"model":"gpt-5-mini","stream":true,"stream_options":{"include_usage":true},"reasoning_effort":"low","messages":[
+

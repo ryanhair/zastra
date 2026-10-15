@@ -967,7 +967,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D34 | Gated agents in workflow steps | `z.step.agent` with a gated agent becomes suspendable automatically (`z.Approvals(A)` / `z.Decisions(A)`); custom steps use `w.agent(A).run`, which resumes the saved agent run on replay. Parallel branches still can't suspend. Supersedes D18's compile error. (§17.4) |
 | D35 | OpenAI API | Catalog `openai/*` models use the Responses API, with `store: false`; `openai_compat` (Chat Completions) remains for third-party servers. (§17.2) |
 | D36 | OpenAI reasoning items | Round-tripped within a run as opaque blocks; dropped from history loaded across runs, like D30, until live evidence says otherwise. (§17.2) |
-| D37 | Thinking control | `.thinking` = `.default`, `.on`, `.off` or `.{ .budget = N }` and `.show_thinking`, mapped per model at comptime from catalog capabilities; impossible combinations are compile errors. (§17.1) |
+| D37 | Reasoning control | `.reasoning` = `.default`, `.on`, `.off` or `.{ .budget = N }` and `.show_reasoning`, mapped per model at comptime from catalog capabilities; impossible combinations are compile errors. (§17.1) |
 | D38 | MCP client era and auth | Dual-era: 2026-07-28 first, falling back to 2025-11-25 `initialize` on stdio and HTTP; HTTP+SSE (2024-11-05) unsupported. No sampling/elicitation/roots (`InputRequiredResult` becomes a tool error). HTTP auth is static headers and a bearer token from the env; OAuth deferred. (§17.5) |
 | D39 | MCP tool list refresh | Via `subscriptions/listen`, legacy `list_changed` notifications, or `ttlMs`; applied at the next run start, tools sorted for stable prefixes. (§17.5) |
 | D40 | MCP schema validation | Adds local `$ref`, `allOf`, conditionals and `prefixItems` with depth/size bounds; unsupported schemas skip validation with a warning instead of hiding the tool. (§17.5) |
@@ -1006,7 +1006,7 @@ Tracing and tooling
 - `z.testing.arbitrary(T)` plus fuzzing of tools (§3)
 
 From the live test
-- first-class thinking control on agents. Today it's only reachable through `provider_options`. On 5.x models thinking is on by default with `display: "omitted"`, so `.reasoning_delta` never fires without `display: "summarized"`.
+- first-class reasoning control on agents (done in N1, §17.1). It used to be reachable only through `provider_options`. On 5.x models thinking is on by default with `display: "omitted"`, so `.reasoning_delta` never fired without `display: "summarized"`.
 - `models-update` reads Anthropic capabilities from `GET /v1/models` when a key is available, instead of hand-copied flags
 
 Candidates, not committed
@@ -1105,14 +1105,14 @@ Out of v1.1: `z.DynamicAgent` (v2, only if a use case appears), nested tool-resu
 - Older models need `budget_tokens`.
 - Some models can't turn thinking off: Opus 5.5 can't, and Sonnet 5.5 returns 400 on `disabled`.
 
-**API (D37).** Two agent fields, next to the existing `.effort`:
+**API (D37).** Two agent fields, next to the existing `.effort`. They're named "reasoning" to match `.reasoning_delta` and the message model:
 
 ```zig
 pub const Planner = z.Agent(Ctx, .{
     .name = "planner",
     .model = "anthropic/claude-sonnet-5-5",
-    .thinking = .on,            // .default (send nothing) | .on | .off | .{ .budget = 8_000 }
-    .show_thinking = true,      // stream summaries as .reasoning_delta
+    .reasoning = .on,           // .default (send nothing) | .on | .off | .{ .budget = 8_000 }
+    .show_reasoning = true,     // stream readable reasoning as .reasoning_delta
     .effort = .high,
 });
 ```
@@ -1125,13 +1125,26 @@ Mapping is done at comptime from catalog capabilities:
 | `.on` | `{type:"adaptive"}`; on budget-only models, a compile error asking for `.{ .budget = N }` | model default (reasoning models think) |
 | `.off` | `{type:"disabled"}` where supported, else a compile error naming the model and suggesting `.effort = .low` | `reasoning.effort = "none"` where supported, else a compile error |
 | `.{ .budget = N }` | `{type:"enabled", budget_tokens: N}` where supported, else a compile error; `N < max_tokens` is checked | compile error (no budgets) |
-| `.show_thinking = true` | `display: "summarized"` | `reasoning.summary = "auto"` |
+| `.show_reasoning = true` | `display: "summarized"` on models with `display` (4.7+); 4.6 and older return summaries anyway | `reasoning.summary = "auto"` |
 
-**Catalog.** `Supports` gains:
-- `thinking: struct { adaptive: bool, budget: bool, disable: bool }`
-- `thinking_display: bool`
+**Catalog.** `Supports` gains `reasoning_modes` (`catalog.ReasoningModes`):
+- `adaptive`, `budget` and `disable`: what the request accepts
+- `disable_only_up_to_high`: turning it off is rejected at effort `xhigh` and `max`
+- `default_on`: the model reasons when the request says nothing
+- `visible`: readable reasoning can be streamed
+- `display_param`: readability is opt-in through `display: "summarized"`
 
-`.reasoning_delta` is in an agent's event union only when `.show_thinking = true` or the model returns raw thinking (D26 style).
+`.reasoning_delta` is in an agent's event union only when `.show_reasoning = true` (D26 style). Without it, reasoning text that arrives anyway (4.6 and older) is dropped; the blocks still go back to the provider within the run.
+
+**Implemented (N1):**
+- `catalog.ReasoningModes` per model: `adaptive`, `budget`, `disable`, `disable_only_up_to_high`, `default_on`, `visible`, `display_param`.
+- 15 compile-fail cases.
+- Golden prefixes for ten mappings (`tests/golden/prefix/reasoning_modes.txt`).
+- A runtime check that a per-run `max_tokens` exceeds the budget.
+- Scripted steps can carry reasoning: `.withReasoning("...", .text("..."))`.
+- `zig build dev -- models` shows each model's reasoning modes.
+- Did-you-mean ties now go to the candidate sharing the longest prefix (`.of` suggests `off`).
+- Not done: the live run with `.show_reasoning`, which needs an Anthropic key.
 
 **`models-update`.** With `ANTHROPIC_API_KEY` set, it reads `GET /v1/models` for:
 - `structured_outputs`
@@ -1143,7 +1156,7 @@ It writes them over `sources.json`, prints a diff, and fails if a field disagree
 **Exit criteria:**
 - Golden prefixes for each thinking mode on 4.6, 5.5 and an OpenAI reasoning model.
 - Compile-fail cases for every compile error in the table.
-- A live run with `.show_thinking` on Sonnet 5.5 that produces `.reasoning_delta`.
+- A live run with `.show_reasoning` on Sonnet 5.5 that produces `.reasoning_delta`.
 
 ### 17.2 N2: OpenAI Responses API (D35, D36)
 

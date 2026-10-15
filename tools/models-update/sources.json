@@ -1,7 +1,7 @@
 {
  "generated": "2026-10-14",
  "sources": {
-  "anthropic": "claude-api skill model table (cached 2026-10-06) and shared/models.md; cache write = 1.25x input (5-minute TTL); structured_output flags checked against GET /v1/models capabilities, 2026-10-14",
+  "anthropic": "claude-api skill model table (cached 2026-10-06) and shared/models.md; cache write = 1.25x input (5-minute TTL); structured_output flags checked against GET /v1/models capabilities, 2026-10-14; reasoning_modes from GET /v1/models thinking types plus the claude-api migration notes (defaults, display, effort limits), 2026-10-14",
   "openai": "https://developers.openai.com/api/docs/pricing (Standard tier, short context), fetched 2026-10-14; model IDs from GET /v1/models. Context windows for gpt-5.4 and newer are not published on the pricing page and are assumed to match gpt-5 (400K/128K)."
  },
  "providers": {
@@ -32,7 +32,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": false,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 10,
@@ -54,12 +63,21 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 10,
     "output": 50,
-    "cache_read": 1.0,
+    "cache_read": 1,
     "cache_write": 12.5
    }
   },
@@ -76,13 +94,22 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": false,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 4,
     "output": 20,
     "cache_read": 0.2,
-    "cache_write": 5.0
+    "cache_write": 5
    }
   },
   {
@@ -98,7 +125,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": true,
+     "disable_only_up_to_high": true,
+     "default_on": true,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 5,
@@ -120,7 +156,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": true,
+     "disable_only_up_to_high": false,
+     "default_on": false,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 5,
@@ -142,7 +187,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": true,
+     "disable_only_up_to_high": false,
+     "default_on": false,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 5,
@@ -164,7 +218,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": true
+    "temperature": true,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": true,
+     "disable": true,
+     "disable_only_up_to_high": false,
+     "default_on": false,
+     "visible": true,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 5,
@@ -186,7 +249,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": false,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 2,
@@ -208,7 +280,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": true,
+     "disable_only_up_to_high": true,
+     "default_on": true,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 2,
@@ -230,7 +311,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": true
+    "temperature": true,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": true,
+     "disable": true,
+     "disable_only_up_to_high": false,
+     "default_on": false,
+     "visible": true,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 3,
@@ -252,7 +342,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": true,
+     "budget": false,
+     "disable": true,
+     "disable_only_up_to_high": true,
+     "default_on": true,
+     "visible": true,
+     "display_param": true
+    }
    },
    "pricing": {
     "input": 0.1,
@@ -274,7 +373,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": true
+    "temperature": true,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": true,
+     "disable": true,
+     "disable_only_up_to_high": false,
+     "default_on": false,
+     "visible": true,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 1,
@@ -296,12 +404,21 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 10,
     "output": 50,
-    "cache_read": 1.0,
+    "cache_read": 1,
     "cache_write": 10
    }
   },
@@ -318,7 +435,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 2,
@@ -340,7 +466,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 2,
@@ -362,7 +497,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 0.1,
@@ -384,7 +528,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 4,
@@ -406,7 +559,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 2,
@@ -428,7 +590,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 0.2,
@@ -450,7 +621,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 5,
@@ -472,7 +652,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 2.5,
@@ -494,7 +683,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 0.75,
@@ -516,7 +714,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 0.2,
@@ -538,7 +745,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 1.75,
@@ -560,7 +776,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 1.25,
@@ -582,7 +807,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 1.25,
@@ -604,7 +838,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 0.25,
@@ -626,7 +869,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 0.05,
@@ -758,7 +1010,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 2,
@@ -780,7 +1041,16 @@
     "parallel_tools": true,
     "prompt_caching": true,
     "forced_tool_choice": true,
-    "temperature": false
+    "temperature": false,
+    "reasoning_modes": {
+     "adaptive": false,
+     "budget": false,
+     "disable": false,
+     "disable_only_up_to_high": false,
+     "default_on": true,
+     "visible": false,
+     "display_param": false
+    }
    },
    "pricing": {
     "input": 1.1,

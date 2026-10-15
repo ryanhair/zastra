@@ -145,6 +145,11 @@ pub const Support = z.Agent(Ctx, .{
     .name = "support", // agents are returned by a function, so they need a name
     .model = "anthropic/claude-sonnet-4-6",
     .instructions = @embedFile("prompts/support.md"), // prompts ship in the binary
+    // Reasoning is checked against the model at compile time: `.off` on a model
+    // that can't stop thinking, or `.on` on one that needs `.{ .budget = N }`,
+    // is a compile error. `.show_reasoning` adds `.reasoning_delta` events.
+    .reasoning = .on,
+    .show_reasoning = true,
     .tools = .{ LookupOrder, IssueRefund, notify.SendEmail, z.mcp.tools(.docs, .{ .allow = &.{"search_docs"} }) },
     .memory = .{
         .history = .{ .last_messages = 30 },

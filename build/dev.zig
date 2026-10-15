@@ -240,6 +240,16 @@ fn cmdModels(out: Out, io: Io, rest: []const []const u8) u8 {
             out.print("  supports: tools={} structured_output={} vision={} reasoning={} caching={}\n", .{
                 m.supports.tools, m.supports.structured_output, m.supports.vision, m.supports.reasoning, m.supports.prompt_caching,
             });
+            if (m.supports.reasoning) {
+                const r = m.supports.reasoning_modes;
+                out.print("  reasoning: {s} by default; .on={s} .off={s} budget={s} show_reasoning={s}\n", .{
+                    if (r.default_on) "on" else "off",
+                    if (r.adaptive) "adaptive" else if (r.default_on) "yes" else "no",
+                    if (!r.disable) "no" else if (r.disable_only_up_to_high) "at effort <= high" else "yes",
+                    if (r.budget) "yes" else "no",
+                    if (!r.visible) "no" else if (r.display_param) "summaries" else "yes",
+                });
+            }
         }
     }
     if (has(rest, "--stale")) {

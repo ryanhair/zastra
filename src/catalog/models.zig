@@ -16,7 +16,10 @@ pub const models = [_]Model{
         .id = "claude-fable-5-1",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = false, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = false, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 10, .output = 50, .cache_read = 0.25, .cache_write = 12.5 },
     },
     .{
@@ -24,7 +27,10 @@ pub const models = [_]Model{
         .id = "claude-fable-5",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 10, .output = 50, .cache_read = 1, .cache_write = 12.5 },
     },
     .{
@@ -32,7 +38,10 @@ pub const models = [_]Model{
         .id = "claude-opus-5-5",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = false, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = false, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 4, .output = 20, .cache_read = 0.2, .cache_write = 5 },
     },
     .{
@@ -40,7 +49,10 @@ pub const models = [_]Model{
         .id = "claude-opus-5",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = true, .disable_only_up_to_high = true, .default_on = true, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 5, .output = 25, .cache_read = 0.5, .cache_write = 6.25 },
     },
     .{
@@ -48,7 +60,10 @@ pub const models = [_]Model{
         .id = "claude-opus-4-8",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = true, .disable_only_up_to_high = false, .default_on = false, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 5, .output = 25, .cache_read = 0.5, .cache_write = 6.25 },
     },
     .{
@@ -56,7 +71,10 @@ pub const models = [_]Model{
         .id = "claude-opus-4-7",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = true, .disable_only_up_to_high = false, .default_on = false, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 5, .output = 25, .cache_read = 0.5, .cache_write = 6.25 },
     },
     .{
@@ -64,7 +82,10 @@ pub const models = [_]Model{
         .id = "claude-opus-4-6",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+            .reasoning_modes = .{ .adaptive = true, .budget = true, .disable = true, .disable_only_up_to_high = false, .default_on = false, .visible = true, .display_param = false },
+        },
         .pricing = .{ .input = 5, .output = 25, .cache_read = 0.5, .cache_write = 6.25 },
     },
     .{
@@ -72,7 +93,10 @@ pub const models = [_]Model{
         .id = "claude-sonnet-5-5",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = false, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = false, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 2, .output = 10, .cache_read = 0.2, .cache_write = 2.5 },
     },
     .{
@@ -80,7 +104,10 @@ pub const models = [_]Model{
         .id = "claude-sonnet-5",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = true, .disable_only_up_to_high = true, .default_on = true, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 2, .output = 10, .cache_read = 0.2, .cache_write = 2.5 },
     },
     .{
@@ -88,7 +115,10 @@ pub const models = [_]Model{
         .id = "claude-sonnet-4-6",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+            .reasoning_modes = .{ .adaptive = true, .budget = true, .disable = true, .disable_only_up_to_high = false, .default_on = false, .visible = true, .display_param = false },
+        },
         .pricing = .{ .input = 3, .output = 15, .cache_read = 0.3, .cache_write = 3.75 },
     },
     .{
@@ -96,7 +126,10 @@ pub const models = [_]Model{
         .id = "claude-haiku-5-5",
         .context_window = 1000000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = true, .budget = false, .disable = true, .disable_only_up_to_high = true, .default_on = true, .visible = true, .display_param = true },
+        },
         .pricing = .{ .input = 0.1, .output = 0.5, .cache_read = 0.01, .cache_write = 0.125 },
     },
     .{
@@ -104,7 +137,10 @@ pub const models = [_]Model{
         .id = "claude-haiku-4-5",
         .context_window = 200000,
         .max_output = 64000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+            .reasoning_modes = .{ .adaptive = false, .budget = true, .disable = true, .disable_only_up_to_high = false, .default_on = false, .visible = true, .display_param = false },
+        },
         .pricing = .{ .input = 1, .output = 5, .cache_read = 0.1, .cache_write = 1.25 },
     },
     .{
@@ -112,7 +148,10 @@ pub const models = [_]Model{
         .id = "gpt-6-astra",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 10, .output = 50, .cache_read = 1, .cache_write = 10 },
     },
     .{
@@ -120,7 +159,10 @@ pub const models = [_]Model{
         .id = "gpt-6.1-sol",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 2, .output = 10, .cache_read = 0.1, .cache_write = 2 },
     },
     .{
@@ -128,7 +170,10 @@ pub const models = [_]Model{
         .id = "gpt-6-sol",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 2, .output = 10, .cache_read = 0.2, .cache_write = 2 },
     },
     .{
@@ -136,7 +181,10 @@ pub const models = [_]Model{
         .id = "gpt-6-luna",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 0.1, .output = 0.5, .cache_read = 0.01, .cache_write = 0.1 },
     },
     .{
@@ -144,7 +192,10 @@ pub const models = [_]Model{
         .id = "gpt-5.6-sol",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 4, .output = 20, .cache_read = 0.4, .cache_write = 4 },
     },
     .{
@@ -152,7 +203,10 @@ pub const models = [_]Model{
         .id = "gpt-5.6-terra",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 2, .output = 12, .cache_read = 0.2, .cache_write = 2 },
     },
     .{
@@ -160,7 +214,10 @@ pub const models = [_]Model{
         .id = "gpt-5.6-luna",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 0.2, .output = 1.2, .cache_read = 0.02, .cache_write = 0.2 },
     },
     .{
@@ -168,7 +225,10 @@ pub const models = [_]Model{
         .id = "gpt-5.5",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 5, .output = 30, .cache_read = 0.5, .cache_write = 5 },
     },
     .{
@@ -176,7 +236,10 @@ pub const models = [_]Model{
         .id = "gpt-5.4",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 2.5, .output = 15, .cache_read = 0.25, .cache_write = 2.5 },
     },
     .{
@@ -184,7 +247,10 @@ pub const models = [_]Model{
         .id = "gpt-5.4-mini",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 0.75, .output = 4.5, .cache_read = 0.075, .cache_write = 0.75 },
     },
     .{
@@ -192,7 +258,10 @@ pub const models = [_]Model{
         .id = "gpt-5.4-nano",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 0.2, .output = 1.25, .cache_read = 0.02, .cache_write = 0.2 },
     },
     .{
@@ -200,7 +269,10 @@ pub const models = [_]Model{
         .id = "gpt-5.2",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 1.75, .output = 14, .cache_read = 0.175, .cache_write = 1.75 },
     },
     .{
@@ -208,7 +280,10 @@ pub const models = [_]Model{
         .id = "gpt-5.1",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 1.25, .output = 10, .cache_read = 0.125, .cache_write = 1.25 },
     },
     .{
@@ -216,7 +291,10 @@ pub const models = [_]Model{
         .id = "gpt-5",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 1.25, .output = 10, .cache_read = 0.125, .cache_write = 1.25 },
     },
     .{
@@ -224,7 +302,10 @@ pub const models = [_]Model{
         .id = "gpt-5-mini",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 0.25, .output = 2, .cache_read = 0.025, .cache_write = 0.25 },
     },
     .{
@@ -232,7 +313,10 @@ pub const models = [_]Model{
         .id = "gpt-5-nano",
         .context_window = 400000,
         .max_output = 128000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 0.05, .output = 0.4, .cache_read = 0.005, .cache_write = 0.05 },
     },
     .{
@@ -240,7 +324,9 @@ pub const models = [_]Model{
         .id = "gpt-4.1",
         .context_window = 1047576,
         .max_output = 32768,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+        },
         .pricing = .{ .input = 2, .output = 8, .cache_read = 0.5, .cache_write = 2 },
     },
     .{
@@ -248,7 +334,9 @@ pub const models = [_]Model{
         .id = "gpt-4.1-mini",
         .context_window = 1047576,
         .max_output = 32768,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+        },
         .pricing = .{ .input = 0.4, .output = 1.6, .cache_read = 0.1, .cache_write = 0.4 },
     },
     .{
@@ -256,7 +344,9 @@ pub const models = [_]Model{
         .id = "gpt-4.1-nano",
         .context_window = 1047576,
         .max_output = 32768,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+        },
         .pricing = .{ .input = 0.1, .output = 0.4, .cache_read = 0.025, .cache_write = 0.1 },
     },
     .{
@@ -264,7 +354,9 @@ pub const models = [_]Model{
         .id = "gpt-4o",
         .context_window = 128000,
         .max_output = 16384,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+        },
         .pricing = .{ .input = 2.5, .output = 10, .cache_read = 1.25, .cache_write = 2.5 },
     },
     .{
@@ -272,7 +364,9 @@ pub const models = [_]Model{
         .id = "gpt-4o-mini",
         .context_window = 128000,
         .max_output = 16384,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = false, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = true,
+        },
         .pricing = .{ .input = 0.15, .output = 0.6, .cache_read = 0.075, .cache_write = 0.15 },
     },
     .{
@@ -280,7 +374,10 @@ pub const models = [_]Model{
         .id = "o3",
         .context_window = 200000,
         .max_output = 100000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 2, .output = 8, .cache_read = 0.5, .cache_write = 2 },
     },
     .{
@@ -288,7 +385,10 @@ pub const models = [_]Model{
         .id = "o4-mini",
         .context_window = 200000,
         .max_output = 100000,
-        .supports = .{ .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false },
+        .supports = .{
+            .tools = true, .structured_output = true, .vision = true, .reasoning = true, .parallel_tools = true, .prompt_caching = true, .forced_tool_choice = true, .temperature = false,
+            .reasoning_modes = .{ .adaptive = false, .budget = false, .disable = false, .disable_only_up_to_high = false, .default_on = true, .visible = false, .display_param = false },
+        },
         .pricing = .{ .input = 1.1, .output = 4.4, .cache_read = 0.275, .cache_write = 1.1 },
     },
 };

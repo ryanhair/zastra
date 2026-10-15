@@ -29,6 +29,29 @@ pub const Supports = struct {
     forced_tool_choice: bool = true,
     /// Accepts a non-default `temperature`.
     temperature: bool = true,
+    /// How the agent's `.reasoning` and `.show_reasoning` map onto this
+    /// model (PLAN.md D37).
+    reasoning_modes: ReasoningModes = .{},
+};
+
+/// What a model's request accepts for controlling its reasoning.
+pub const ReasoningModes = struct {
+    /// Anthropic `thinking: {type: "adaptive"}`.
+    adaptive: bool = false,
+    /// Anthropic `thinking: {type: "enabled", budget_tokens: N}`.
+    budget: bool = false,
+    /// Reasoning can be turned off.
+    disable: bool = false,
+    /// Turning reasoning off is rejected at effort `xhigh` and `max`.
+    disable_only_up_to_high: bool = false,
+    /// The model reasons when the request doesn't mention it.
+    default_on: bool = false,
+    /// Readable reasoning can be streamed (Anthropic summaries, or
+    /// `reasoning_content` from OpenAI-compatible servers).
+    visible: bool = false,
+    /// Readable reasoning is opt-in through `display: "summarized"`;
+    /// without it, thinking blocks arrive with empty text.
+    display_param: bool = false,
 };
 
 /// USD per million tokens.
@@ -169,6 +192,8 @@ pub fn custom(comptime opts: anytype) Spec {
         var supports: Supports = .{};
         if (@hasField(O, "supports")) {
             reflect.checkConfigFields(@TypeOf(opts.supports), reflect.fieldNames(Supports), "z.custom(...).supports");
+            if (@hasField(@TypeOf(opts.supports), "reasoning_modes"))
+                reflect.checkConfigFields(@TypeOf(opts.supports.reasoning_modes), reflect.fieldNames(ReasoningModes), "z.custom(...).supports.reasoning_modes");
             for (std.meta.fields(@TypeOf(opts.supports))) |f| @field(supports, f.name) = @field(opts.supports, f.name);
         }
         return .{

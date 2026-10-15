@@ -293,7 +293,9 @@ pub fn Stream(comptime A: type) type {
                         switch (e) {
                             .delta => |d| switch (d) {
                                 .text => |t| if (t.len > 0) return @unionInit(A.Event, "text_delta", t),
-                                .reasoning => |t| return @unionInit(A.Event, "reasoning_delta", t),
+                                // Without `.show_reasoning` the text is dropped here; the
+                                // block itself still goes back to the provider.
+                                .reasoning => |t| if (A.show_reasoning and t.len > 0) return @unionInit(A.Event, "reasoning_delta", t),
                                 else => {},
                             },
                             .finish => |f| try s.onModelFinish(f),
@@ -407,6 +409,11 @@ pub fn Stream(comptime A: type) type {
                 s.diag.print(0, "agent '{s}': {s} is not set (needed for model {s})", .{ A.id, spec.api_key_env.?, comptime spec.fullName() });
                 return error.MissingApiKey;
             }
+            const max_tokens = s.opts.max_tokens orelse A.max_tokens_default;
+            if (A.reasoning_budget) |budget| if (max_tokens <= budget) {
+                s.diag.print(0, "agent '{s}': max_tokens {d} must be greater than the reasoning budget ({d}); the budget counts toward it", .{ A.id, max_tokens, budget });
+                return error.BadRequest;
+            };
             s.step_span = s.st.tracer.begin(.agent_step, A.id, s.trace_id, &s.run_span);
             s.step_span.attr("step", s.step);
             s.step_open = true;
@@ -421,7 +428,7 @@ pub fn Stream(comptime A: type) type {
                 .prefix = prefix,
                 .system_suffix = s.system_suffix,
                 .messages = s.messages.items,
-                .max_tokens = s.opts.max_tokens orelse A.max_tokens_default,
+                .max_tokens = max_tokens,
                 .max_tokens_field = spec.max_tokens_field,
                 .headers = if (s.st.tag_requests) &tag_headers else spec.headers,
                 .diag = &s.diag,

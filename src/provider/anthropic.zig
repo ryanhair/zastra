@@ -40,6 +40,11 @@ pub fn buildPrefix(comptime parts: p.PrefixParts) p.Prefix {
             if (parts.effort) |e| oc = oc ++ (if (oc.len > 0) "," else "") ++ "\"effort\":\"" ++ @tagName(e) ++ "\"";
             j = j ++ ",\"output_config\":{" ++ oc ++ "}";
         }
+        if (parts.reasoning) |r| j = j ++ ",\"thinking\":" ++ switch (r) {
+            .adaptive => |a| if (a.summarized) "{\"type\":\"adaptive\",\"display\":\"summarized\"}" else "{\"type\":\"adaptive\"}",
+            .budget => |n| std.fmt.comptimePrint("{{\"type\":\"enabled\",\"budget_tokens\":{d}}}", .{n}),
+            .disabled => "{\"type\":\"disabled\"}",
+        };
         if (parts.temperature) |t| j = j ++ std.fmt.comptimePrint(",\"temperature\":{d}", .{t});
         if (parts.extra) |x| j = j ++ "," ++ x;
         if (cache) j = j ++ cc;

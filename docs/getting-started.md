@@ -133,6 +133,21 @@ while (try s.next()) |event| switch (event) {
 
 `generate` on an agent with approval-gated tools returns `error.ApprovalRequired`, unless you pass `.on_approval`.
 
+### Reasoning
+
+Models differ in whether they think by default, whether thinking can be turned off, and whether you can see it. zastra checks your choice against the model at compile time:
+
+```zig
+pub const Planner = z.Agent(Ctx, .{
+    .name = "planner",
+    .model = "anthropic/claude-sonnet-5-5",
+    .reasoning = .on,        // .default (the model's own behaviour), .on, .off, or .{ .budget = N } on older models
+    .show_reasoning = true,  // adds `.reasoning_delta` events with readable summaries
+});
+```
+
+`.reasoning = .off` on a model that can't stop thinking, `.on` on one that needs a budget, or `.show_reasoning` where nothing readable comes back are all compile errors that name the fix. `zig build dev -- models` lists what each model your App uses supports. You pay for reasoning tokens whether or not they're shown.
+
 ## 6. Workflows
 
 ```zig

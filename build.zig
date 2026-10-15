@@ -132,6 +132,8 @@ pub fn build(b: *std.Build) void {
     models_run.setCwd(b.path("."));
     models_run.has_side_effects = true;
     b.step("models-update", "Regenerate src/catalog/models.zig from tools/models-update/sources.json").dependOn(&models_run.step);
+    const models_update_tests = b.addTest(.{ .root_module = models_update.root_module });
+    test_step.dependOn(&b.addRunArtifact(models_update_tests).step);
 }
 
 fn addSizeChecks(b: *std.Build, host_mod: *std.Build.Module, sqlite_dep: *std.Build.Dependency) void {

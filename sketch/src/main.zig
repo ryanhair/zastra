@@ -70,7 +70,7 @@ pub fn main(init: std.process.Init) !void {
         // dropped message.
         while (try stream.next()) |event| switch (event) {
             .text_delta => |t| try stdoutWrite(io, t),
-            .reasoning_delta => {}, // opt-in to show thinking
+            .reasoning_delta => |t| std.debug.print("\x1b[2m{s}\x1b[0m", .{t}), // summaries, dimmed (`.show_reasoning`)
 
             // Tool events are typed per tool: `.tool_call` carries a union
             // generated from the agent's tool set, so this is a real switch.

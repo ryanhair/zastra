@@ -74,7 +74,13 @@ const TriageFallback = z.Agent(Ctx, .{
     .output = Triage,
 });
 
-const App = z.App(.{ .ctx = Ctx, .agents = .{ Support, TriageAgent, TriageFallback } });
+/// Reasoning shown as `.reasoning_delta` events (PLAN.md D37).
+const Thinker = z.Agent(Ctx, .{ .name = "thinker", .model = "anthropic/claude-sonnet-4-6", .reasoning = .on, .show_reasoning = true, .tools = .{LookupOrder} });
+/// Reasoning on but not shown: no `.reasoning_delta` in the event union.
+const QuietThinker = z.Agent(Ctx, .{ .name = "quiet_thinker", .model = "anthropic/claude-sonnet-4-6", .reasoning = .on, .tools = .{LookupOrder} });
+const Budgeted = z.Agent(Ctx, .{ .name = "budgeted", .model = "anthropic/claude-sonnet-4-6", .reasoning = .{ .budget = 4_000 } });
+
+const App = z.App(.{ .ctx = Ctx, .agents = .{ Support, TriageAgent, TriageFallback, Thinker, QuietThinker, Budgeted } });
 
 test "tool loop: call, result, answer" {
     var db: Db = .{};
@@ -130,7 +136,6 @@ test "streaming: exhaustive events, typed tool calls and approvals" {
     var finished = false;
     while (try stream.next()) |event| switch (event) {
         .text_delta => |d| try text.appendSlice(t.allocator, d),
-        .reasoning_delta => {},
         .tool_call => |call| switch (call) {
             .lookup_order => {},
             .issue_refund => |in| {
@@ -396,4 +401,55 @@ test "D30: thinking blocks from earlier runs aren't replayed" {
     try t.expect(std.mem.indexOf(u8, third, "Let me check.") != null);
     try t.expect(std.mem.indexOf(u8, third, "\"type\":\"thinking\"") == null);
     try t.expect(std.mem.indexOf(u8, third, "redacted_thinking") == null);
+}
+
+test "reasoning: shown as events, and sent back with its signature within the run" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(Thinker, &.{
+        .withReasoning("Need the order first.", .tool(LookupOrder, .{ .order_id = "ORD-1" })),
+        .withReasoning("It's $90.", .text("ORD-1 is $90.")),
+    });
+    var stream = try h.agent(Thinker).stream("Where's ORD-1?", .{});
+    defer stream.deinit();
+    var reasoning: std.ArrayList(u8) = .empty;
+    defer reasoning.deinit(t.allocator);
+    while (try stream.next()) |event| switch (event) {
+        .reasoning_delta => |d| try reasoning.appendSlice(t.allocator, d),
+        else => {},
+    };
+    try t.expectEqualStrings("Need the order first.It's $90.", reasoning.items);
+    // The thinking block and its signature went back unchanged in step 2.
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "{\"type\":\"thinking\",\"thinking\":\"Need the order first.\",\"signature\":\"sig_scripted_1\"}") != null);
+    try t.expect(std.mem.indexOf(u8, h.requests()[0], "\"thinking\":{\"type\":\"adaptive\"}") != null);
+}
+
+test "reasoning: not shown means no event, but the block still round-trips" {
+    comptime {
+        std.debug.assert(!@hasField(QuietThinker.Event, "reasoning_delta"));
+        std.debug.assert(@hasField(Thinker.Event, "reasoning_delta"));
+        std.debug.assert(!@hasField(Support.Event, "reasoning_delta"));
+    }
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(QuietThinker, &.{
+        .withReasoning("Look it up.", .tool(LookupOrder, .{ .order_id = "ORD-1" })),
+        .text("ORD-1 is $90."),
+    });
+    const r = try h.agent(QuietThinker).generate("Where's ORD-1?", .{});
+    try t.expectEqualStrings("ORD-1 is $90.", r.text);
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "\"thinking\":\"Look it up.\"") != null);
+}
+
+test "reasoning: a per-run max_tokens must exceed the budget" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    try t.expectError(error.BadRequest, h.agent(Budgeted).generate("Hi", .{ .max_tokens = 2_000 }));
+    try t.expectEqualStrings("agent 'budgeted': max_tokens 2000 must be greater than the reasoning budget (4000); the budget counts toward it", h.rt.lastDiagnostic());
 }

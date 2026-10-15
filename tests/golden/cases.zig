@@ -48,7 +48,20 @@ const example = [_]Case{
     text("header/support.h", z.capi.header.render(support.App, "support")),
 };
 
-pub const all = example ++ schemaCases(fx.Order, "order") ++
+fn reasoningPrefixes() []const u8 {
+    comptime {
+        var out: []const u8 = "";
+        for (@typeInfo(fx.reasoning_agents).@"struct".decls) |d| {
+            const A = @field(fx.reasoning_agents, d.name);
+            out = out ++ d.name ++ (if (A.show_reasoning) " (reasoning_delta)" else "") ++ ":\n" ++ A.prefix.json ++ "\n\n";
+        }
+        return out;
+    }
+}
+
+const reasoning = [_]Case{text("prefix/reasoning_modes.txt", reasoningPrefixes())};
+
+pub const all = example ++ reasoning ++ schemaCases(fx.Order, "order") ++
     schemaCases(fx.Ticket, "ticket") ++
     schemaCases(fx.Triage, "triage") ++
     schemaCases(fx.Resolution, "resolution") ++
