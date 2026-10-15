@@ -1145,7 +1145,7 @@ Mapping is done at comptime from catalog capabilities:
 - Scripted steps can carry reasoning: `.withReasoning("...", .text("..."))`.
 - `zig build dev -- models` shows each model's reasoning modes.
 - Did-you-mean ties now go to the candidate sharing the longest prefix (`.of` suggests `off`).
-- Not done: the live run with `.show_reasoning`, which needs an Anthropic key.
+- Live (2026-10-15, requests captured by a logging proxy), each agent running a three-step tool loop: Sonnet 5.5 default and `.on` + `.effort = .high` with `.show_reasoning` (`adaptive` + `display: "summarized"`), Sonnet 4.6 `.on` (`adaptive`), Haiku 4.5 `.{ .budget = 2048 }` (`enabled`) all streamed `.reasoning_delta`, and each thinking block went back with its signature in the next step. Sonnet 5 `.off` at `.effort = .high` (`disabled`) streamed none. Adaptive models sometimes skip thinking on a step; then nothing is sent back. `models-update` against `GET /v1/models` found no drift.
 
 **`models-update`.** With `ANTHROPIC_API_KEY` set, it reads `GET /v1/models` for:
 - `structured_outputs`
