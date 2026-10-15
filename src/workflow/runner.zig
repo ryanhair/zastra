@@ -194,6 +194,8 @@ fn Exec(comptime W: type) type {
         failed_step: []const u8 = "",
         failed_err: anyerror = error.Unknown,
         failed_msg: []const u8 = "",
+        /// `"@<i>"` per enclosing loop iteration, outermost first (D46).
+        iteration: []const u8 = "",
 
         fn run(x: *X) Error!W.Result {
             x.trace_id = x.st.tracer.newId();
@@ -302,6 +304,8 @@ fn Exec(comptime W: type) type {
                 try execNodes(S.nodes, path, avail, S.Input, 0, x, input, input)
             else if (comptime step.isParallel(S))
                 try execParallel(S, path, avail, Initial, x, initial, input)
+            else if (comptime step.isLoop(S))
+                try execLoop(S, path, avail, Initial, x, initial, input)
             else
                 try execPlain(S, path, avail, Initial, x, initial, input, x.arena);
 
@@ -340,7 +344,9 @@ fn Exec(comptime W: type) type {
                 .step_id = path,
                 .resource = x.resource,
                 .trace_id = x.trace_id,
+                .iteration = x.iteration,
             };
+            if (x.iteration.len > 0) span.attr("iteration", x.iteration);
             if (comptime step.isSuspendable(S)) {
                 if (x.state.resume_at) |at| if (std.mem.eql(u8, at, path)) {
                     var issue: parse.Issue = .{};
@@ -432,6 +438,42 @@ fn Exec(comptime W: type) type {
             const set = @typeInfo(E).error_set orelse return true;
             inline for (set) |e| if (std.mem.eql(u8, e.name, @errorName(err))) return true;
             return false;
+        }
+
+        /// Run a loop (PLAN.md §18.3, D45, D46). `<path>#` holds the finished
+        /// iteration count and the latest value; the body's slots hold only
+        /// the current iteration and are cleared in the same save that
+        /// advances the count. `until` and the limit are checked before each
+        /// iteration after the first, so a replay after a crash between
+        /// those saves doesn't run an extra iteration.
+        fn execLoop(comptime L: type, comptime path: []const u8, comptime avail: []const Avail, comptime Initial: type, x: *X, initial: Initial, input: L.Input) Flow!L.Output {
+            const progress = comptime path ++ "#";
+            var iter: u32 = 0;
+            var cur: L.Output = input;
+            if (@field(x.state.steps, progress)) |p| {
+                iter = p.iter;
+                cur = p.value;
+            }
+            const outer = x.iteration;
+            defer x.iteration = outer;
+            while (true) {
+                if (iter > 0) {
+                    if (L.until(cur)) return cur;
+                    if (iter >= L.max) switch (L.limit) {
+                        .finish => return cur,
+                        .fail => return x.fail(path, error.LoopLimit, "workflow '{s}': loop '{s}' reached its limit of {d} iterations without `until` returning true", .{ W.id, path, L.max }),
+                    };
+                }
+                x.iteration = try std.fmt.allocPrint(x.arena, "{s}@{d}", .{ outer, iter });
+                const out = try execStep(L.body, path, avail, Initial, x, initial, cur);
+                iter += 1;
+                inline for (W.slots) |sl| {
+                    if (comptime std.mem.startsWith(u8, sl.path, path ++ ".")) @field(x.state.steps, sl.path) = null;
+                }
+                @field(x.state.steps, progress) = .{ .iter = iter, .value = out };
+                try x.save("running", null);
+                cur = out;
+            }
         }
 
         /// Run a parallel group's branches concurrently (PLAN.md §18.1, D47).

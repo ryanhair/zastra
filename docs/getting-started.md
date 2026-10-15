@@ -247,6 +247,20 @@ _ = try rt.workflow(HandleTicket).resumeStep(z.step.agentOf(Refunder), arena, ru
 
 The agent run is saved with the workflow run, so its tools run once, after approval. In a custom step, declare `pub const Suspend = z.Approvals(Refunder);` and `pub const Resume = z.Decisions(Refunder);` and call `w.agent(Refunder).run(...)`. There's no resume branch to write: on replay, finished calls return their saved results. Gated agents can't run inside `z.step.parallel`.
 
+To repeat a step, wrap it in `z.step.loop`. The body's Input and Output must be the same type, because each iteration's output is the next one's input:
+
+```zig
+fn approved(d: Draft) bool {
+    return d.approved;
+}
+const Polish = z.step.loop(ReviseReply, .{ .until = approved, .max = 3, .on_limit = .finish });
+```
+
+- The body runs at least once. `until` is checked after each iteration.
+- `.max` is required. When the limit is reached, the run fails with `error.LoopLimit`, unless `.on_limit = .finish` returns the last value instead.
+- Every iteration is saved, so a restart continues at the current iteration.
+- A body can be a workflow, so a loop can contain suspendable steps and approval-gated agents.
+
 ## 7. Test without a network
 
 ```zig

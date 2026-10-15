@@ -75,6 +75,8 @@ pub const otherwise = @import("workflow/step.zig").otherwise;
 pub const step = struct {
     pub const agent = @import("workflow/step.zig").agentStep;
     pub const parallel = @import("workflow/step.zig").parallel;
+    /// `z.step.loop(Body, .{ .until, .max, .on_limit })` (D45).
+    pub const loop = @import("workflow/step.zig").loop;
     /// Names a `z.step.agent(A, ...)` step in `resumeStep`.
     pub const agentOf = @import("workflow/step.zig").agentOf;
 };

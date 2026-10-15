@@ -6,4 +6,5 @@ test {
     _ = @import("mcp_test.zig");
     _ = @import("workflow_test.zig");
     _ = @import("workflow_approval_test.zig");
+    _ = @import("workflow_loop_test.zig");
 }

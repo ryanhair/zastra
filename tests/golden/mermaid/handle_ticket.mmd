@@ -23,9 +23,18 @@ flowchart TD
     answer_parallel_order_faq_faq --> answer_parallel_order_faq_join
     answer_draft_reply[draft_reply]
     answer_parallel_order_faq_join --> answer_draft_reply
+    subgraph answer_loop_revise_reply_sub [loop_revise_reply]
+    answer_loop_revise_reply_start((loop))
+    answer_loop_revise_reply_revise_reply[revise_reply]
+    answer_loop_revise_reply_start --> answer_loop_revise_reply_revise_reply
+    end
+    answer_draft_reply --> answer_loop_revise_reply_start
+    answer_loop_revise_reply_revise_reply -.->|repeat, max 3| answer_loop_revise_reply_start
+    answer_answer[answer]
+    answer_loop_revise_reply_revise_reply --> answer_answer
     end
     branch_0 -->|otherwise| answer_start
     notify_customer[notify_customer]
     refund_refunder --> notify_customer
-    answer_draft_reply --> notify_customer
+    answer_answer --> notify_customer
     notify_customer --> finish([end])

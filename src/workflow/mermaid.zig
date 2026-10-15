@@ -72,6 +72,16 @@ fn one(comptime T: type, comptime prefix: []const u8, comptime from: []const []c
             text = text ++ r.text ++ "    end\n" ++ edges(from, sub_start, label);
             return .{ .text = text, .tails = r.tails };
         }
+        if (step.isLoop(T)) {
+            // The body inside a subgraph, with a dashed edge back to its start.
+            const head = id ++ "_start";
+            var text: []const u8 = "    subgraph " ++ id ++ "_sub [" ++ step.idOf(T) ++ "]\n" ++ "    " ++ head ++ "((loop))\n";
+            const r = one(T.body, path, &.{head}, "");
+            text = text ++ r.text ++ "    end\n" ++ edges(from, head, label);
+            const back = std.fmt.comptimePrint("repeat, max {d}", .{T.max});
+            for (r.tails) |tl| text = text ++ "    " ++ tl ++ " -.->|" ++ back ++ "| " ++ head ++ "\n";
+            return .{ .text = text, .tails = r.tails };
+        }
         if (step.isParallel(T)) {
             const fork = id ++ "_fork";
             var text: []const u8 = "    " ++ fork ++ "[/" ++ step.idOf(T) ++ "/]\n" ++ edges(from, fork, label);

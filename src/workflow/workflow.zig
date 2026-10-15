@@ -57,18 +57,27 @@ fn describe(comptime T: type) []const u8 {
 fn checkThen(comptime Ctx: type, comptime wf: []const u8, comptime nodes: []const Node, comptime Cur: type, comptime S: type) type {
     comptime {
         if (@TypeOf(S) != type) errors.fail("workflow '{s}': `.then(...)` takes a step type, got a value of type {s}", .{ wf, @typeName(@TypeOf(S)) });
-        if (step.isWorkflow(S)) {
-            if (S.Ctx != Ctx) errors.fail("workflow '{s}': nested workflow '{s}' uses context {s}, not {s}", .{ wf, S.id, @typeName(S.Ctx), @typeName(Ctx) });
-        } else if (!step.isParallel(S)) {
-            step.checkStep(S, Ctx);
-        } else {
-            for (std.meta.fields(@TypeOf(S.steps))) |f| step.checkStep(@field(S.steps, f.name), Ctx);
-        }
+        checkNode(Ctx, wf, S);
         if (S.Input != Cur) {
             const prev = if (nodes.len == 0) "the workflow input" else "previous step '" ++ lastId(nodes) ++ "'";
             errors.fail("workflow '{s}': step '{s}' expects Input `{s}`, but {s} outputs `{s}`", .{ wf, step.idOf(S), describe(S.Input), prev, describe(Cur) });
         }
         return S.Output;
+    }
+}
+
+/// Validate a step, nested workflow, parallel group or loop against `Ctx`.
+fn checkNode(comptime Ctx: type, comptime wf: []const u8, comptime S: type) void {
+    comptime {
+        if (step.isWorkflow(S)) {
+            if (S.Ctx != Ctx) errors.fail("workflow '{s}': nested workflow '{s}' uses context {s}, not {s}", .{ wf, S.id, @typeName(S.Ctx), @typeName(Ctx) });
+        } else if (step.isLoop(S)) {
+            checkNode(Ctx, wf, S.body);
+        } else if (step.isParallel(S)) {
+            for (std.meta.fields(@TypeOf(S.steps))) |f| step.checkStep(@field(S.steps, f.name), Ctx);
+        } else {
+            step.checkStep(S, Ctx);
+        }
     }
 }
 
@@ -250,6 +259,20 @@ fn analyzeStep(comptime wf: []const u8, comptime In: type, comptime S: type, com
             out.shape = "wf(" ++ S.id ++ ":" ++ r.shape ++ ")";
             return out;
         }
+        if (step.isLoop(S)) {
+            // The body's slots hold the current iteration only; `<path>#`
+            // holds the iteration count and latest value (D46). `.max`,
+            // `.until` and `.on_limit` stay out of the shape, so tuning them
+            // keeps snapshots valid.
+            const r = analyzeStep(wf, In, S.body, path, avail, &.{S.body});
+            merge(&out, r);
+            out.slots = out.slots ++ &[_]Slot{
+                .{ .path = path ++ "#", .T = S.Progress, .S = void },
+                .{ .path = path, .T = Done(S.Output), .S = S },
+            };
+            out.shape = "loop(" ++ path ++ ":" ++ r.shape ++ ")";
+            return out;
+        }
         out.slots = &[_]Slot{.{ .path = path, .T = Done(S.Output), .S = S }};
         out.shape = "step(" ++ path ++ ":" ++ fingerprint.describe(S.Input) ++ "->" ++ fingerprint.describe(S.Output) ++
             (if (step.isSuspendable(S)) ";susp:" ++ fingerprint.describe(S.Suspend) ++ "/" ++ fingerprint.describe(S.Resume) else "") ++
@@ -275,6 +298,8 @@ fn analyzeStep(comptime wf: []const u8, comptime In: type, comptime S: type, com
                 const found = for (avail) |a| {
                     if (a.T == R) break true;
                 } else false;
+                if (!found) for (all) |L| if (step.isLoop(L) and inLoopBody(L, R))
+                    errors.fail("step '{s}' needs '{s}', which runs inside loop '{s}'; its output only lasts one iteration. Carry the value in the loop's `{s}` and need the loop instead", .{ step.idOf(M), step.idOf(R), L.name, describe(L.Output) });
                 if (!found) out.open = out.open ++ &[_]OpenNeed{.{ .consumer = step.idOf(M), .key = f.name, .T = R }};
             }
         }
@@ -296,12 +321,24 @@ fn allSteps(comptime nodes: []const Node) []const type {
     }
 }
 
+fn inLoopBody(comptime L: type, comptime T: type) bool {
+    const B = L.body;
+    if (B == T) return true;
+    if (step.isWorkflow(B)) return contains(B.nodes, T);
+    if (step.isLoop(B)) return inLoopBody(B, T);
+    if (step.isParallel(B)) for (std.meta.fields(@TypeOf(B.steps))) |f| {
+        if (@field(B.steps, f.name) == T) return true;
+    };
+    return false;
+}
+
 /// Does `T` appear anywhere in this graph (including nested workflows)?
 fn contains(comptime nodes: []const Node, comptime T: type) bool {
     for (nodes) |n| switch (n.kind) {
         .step => {
             if (n.T == T) return true;
             if (step.isWorkflow(n.T) and contains(n.T.nodes, T)) return true;
+            if (step.isLoop(n.T) and inLoopBody(n.T, T)) return true;
         },
         .branch => for (n.arms) |a| {
             if (a.T == T) return true;

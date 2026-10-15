@@ -3,6 +3,7 @@
 ## Unreleased (v1.2.0)
 
 ### Added
+- **`z.step.loop(Body, .{ .until, .max, .on_limit })`:** repeat a step, parallel group or workflow until a predicate holds, with a required bound. Iterations are saved and resume like steps, and gated agents inside a loop keep one saved run per iteration (D45, D46).
 - **Working-memory migrations:** `pub const migrations = .{ z.migrate(OldNotes, f) }` on the working-memory type converts values saved with older shapes instead of resetting them. Migrations chain, and they also apply when resuming saved agent runs (D48).
 
 ### Changed

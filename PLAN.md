@@ -400,7 +400,7 @@ Additional constants:
          which only exists in an enclosing workflow. Register the enclosing workflow instead.
   ```
 - `z.initial` always means the input of the innermost workflow that contains the step.
-- the graph is acyclic (loops arrive in v1.1 as an explicit `z.step.loop` with a comptime-bounded or runtime-bounded iteration count)
+- the graph is acyclic; repetition is an explicit `z.step.loop` with a required comptime bound (§18.3)
 
 It also derives:
 - `W.Suspended`, a `union(enum)` of every reachable step with `Suspend`/`Resume`
@@ -1581,6 +1581,35 @@ pub const CustomerNotes = struct {
   - an `until` with the wrong signature
 - Golden Mermaid for a loop; a fingerprint test showing that `.max` doesn't change it.
 - Sketch and the support example: `DraftReply` becomes a loop over draft → critique with `.max = 3`.
+
+**Implemented (N9, 2026-10-15):**
+- `z.step.loop(Body, .{ .until, .max, .on_limit, .name })` returns a step-like type: `zastra_loop`, `body`, `until`, `max`, `limit`, and `Progress = struct { iter, value }`. The default id is `loop_<body id>`.
+- **Analysis:** the body is analyzed under the loop's path. The loop adds two slots: `<path>#` (`Progress`) and `<path>` (`Done(Output)`). The shape is `loop(<path>:<body shape>)`.
+- **`needs`:** a step that needs a body step from outside the loop is a compile error naming the loop.
+- **Runner (`execLoop`):**
+  - Reads the progress slot, then checks `until` and the limit before every iteration after the first.
+  - Runs the body through `execStep`.
+  - Then clears every slot under `<path>.`, writes progress and saves once.
+  - Checking `until` at the top means a replay after a crash between the body's save and the progress save neither repeats the body nor runs an extra iteration.
+- **Iteration ids:**
+  - `X.iteration` holds `"@i"` per loop level and is copied into `StepCtx.iteration`.
+  - Saved agent-run ids are `<run>/<path>@<i>#<n>`.
+  - Step spans get an `iteration` attribute. The default agent thread is unchanged.
+- **Mermaid:** the body sits in a subgraph with a dashed `repeat, max N` back edge. The predicate's name isn't available at comptime, so the label doesn't include it.
+- **Tests (`tests/workflow_loop_test.zig`):**
+  - `until` ends the loop; the limit fails or finishes
+  - an agent step inside a loop
+  - a gated agent that finishes in iteration 1 and suspends in iteration 2, then resumes after a restart; a mutation check confirms iteration 1's run isn't reused without the `@i` suffix
+  - a workflow body with a nested loop, a parallel group and a suspend mid-iteration, where steps before the suspend point don't re-run
+  - Mermaid and fingerprint stability under changes to `.max`, `.until` and `.on_limit`
+  - Crash recovery between the two saves is covered by the top-of-loop check rather than by a kill test.
+- Compile-fail cases: Input ≠ Output, a missing `.max`, `.max = 0`, a wrong `until` signature, a loop inside parallel, `needs` on a body step from after the loop.
+- **The support example and the sketch:**
+  - `DraftReply` now produces a `Draft`.
+  - `Polish = z.step.loop(ReviseReply, .{ .until = approved, .max = 3, .on_limit = .finish })` runs a new `ReplyCritic` agent and revises with `ReplyWriter`.
+  - `Answer` turns the `Draft` into a `Resolution`.
+  - The example test scripts one rejection and one approval.
+  - Goldens updated (Mermaid, manifest, header).
 
 ### 18.4 N10: `.output_partial` streaming (D43, D44)
 

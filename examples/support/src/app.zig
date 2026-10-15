@@ -205,6 +205,16 @@ pub const ReplyWriter = z.Agent(Ctx, .{
     .tools = .{LookupOrder},
 });
 
+/// Reviews a draft reply before it goes out.
+pub const ReplyCritic = z.Agent(Ctx, .{
+    .name = "reply_critic",
+    .model = "anthropic/claude-sonnet-4-6",
+    .instructions = "Review a customer support reply. Approve it if it answers the question politely and accurately; otherwise say what to fix.",
+    .output = Review,
+});
+
+pub const Review = struct { approved: bool, feedback: []const u8 };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Workflow steps: a step is a type with `Input`, `Output`, `run`.
 //    Optional decls unlock features:
@@ -260,9 +270,12 @@ const SearchFaq = struct {
 /// Every branch must accept the same Input, or it fails to compile.
 const Gather = z.step.parallel(.{ .order = FetchOrder, .faq = SearchFaq });
 
+/// A reply in progress: the loop below revises it until the critic approves.
+const Draft = struct { message: []const u8, approved: bool = false, rounds: u8 = 0 };
+
 const DraftReply = struct {
     pub const Input = Gather.Output;
-    pub const Output = Resolution;
+    pub const Output = Draft;
     // Typed access to Classify's output. Classify lives in the enclosing
     // HandleTicket workflow, not in AnswerPath, so AnswerPath commits as an
     // *open* workflow: it can be embedded, but not run or registered on its
@@ -278,7 +291,44 @@ const DraftReply = struct {
             }),
             .{},
         );
-        return .{ .kind = .answered, .message = reply.text };
+        return .{ .message = reply.text };
+    }
+};
+
+/// One round of review: the critic approves the draft, or the writer revises
+/// it with the critic's feedback. Input and Output are the same type, so it
+/// can be a loop body.
+const ReviseReply = struct {
+    pub const Input = Draft;
+    pub const Output = Draft;
+
+    pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !Output {
+        const review = try w.agent(ReplyCritic).generate(in.message, .{});
+        if (review.output.approved) return .{ .message = in.message, .approved = true, .rounds = in.rounds + 1 };
+        // The writer's thread for this step spans the loop's iterations, so
+        // it sees its earlier drafts.
+        const revised = try w.agent(ReplyWriter).generate(
+            try w.fmt("Revise your reply. Feedback: {s}", .{review.output.feedback}),
+            .{},
+        );
+        return .{ .message = revised.text, .rounds = in.rounds + 1 };
+    }
+};
+
+fn approved(d: Draft) bool {
+    return d.approved;
+}
+
+/// A loop: run ReviseReply until `approved`, at most 3 times. The bound is
+/// required; `.on_limit = .finish` sends the last draft instead of failing.
+/// Each iteration is saved, so a restart picks up at the current round.
+const Polish = z.step.loop(ReviseReply, .{ .until = approved, .max = 3, .on_limit = .finish });
+
+const Answer = struct {
+    pub const Input = Draft;
+    pub const Output = Resolution;
+    pub fn run(_: *z.StepCtx(Ctx, @This()), in: Input) !Output {
+        return .{ .kind = .answered, .message = in.message };
     }
 };
 
@@ -314,6 +364,8 @@ const RefundPath = z.Workflow(Ctx, "refund", Triage)
 const AnswerPath = z.Workflow(Ctx, "answer", Triage)
     .then(Gather)
     .then(DraftReply)
+    .then(Polish)
+    .then(Answer)
     .commit();
 
 pub const HandleTicket = z.Workflow(Ctx, "handle_ticket", Ticket)
@@ -337,7 +389,7 @@ pub const HandleTicket = z.Workflow(Ctx, "handle_ticket", Ticket)
 
 pub const App = z.App(.{
     .ctx = Ctx,
-    .agents = .{ Support, TriageAgent, Refunder, ReplyWriter },
+    .agents = .{ Support, TriageAgent, Refunder, ReplyWriter, ReplyCritic },
     .workflows = .{HandleTicket},
     // Comptime choice so unused backends are never compiled in.
     .storage = .sqlite, // .sqlite | .memory
@@ -414,6 +466,26 @@ test "large refunds pause for approval and resume after a restart" {
     const done = try h.workflow(HandleTicket).resumeStep(z.step.agentOf(Refunder), run_id, .{ .approve = &.{req_id} });
     try std.testing.expect(done.completed.sent);
     try std.testing.expectEqual(1, db.refundCount());
+}
+
+test "the reply loop revises a draft until the critic approves it" {
+    var db = OrderDb.fake(&.{});
+    defer db.close();
+    var mailer: notify.Mailer = .{};
+    var ctx: Ctx = .{ .db = &db, .mailer = &mailer };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(TriageAgent, &.{.output(Triage{ .category = .shipping, .urgency = 2, .summary = "Where is my parcel?" })});
+    h.script(ReplyWriter, &.{ .text("It's coming."), .text("Your parcel ships within 2 days; tracking follows by email.") });
+    h.script(ReplyCritic, &.{
+        .output(Review{ .approved = false, .feedback = "Give a timeframe." }),
+        .output(Review{ .approved = true, .feedback = "" }),
+    });
+    const ticket: Ticket = .{ .customer_id = "c-7", .subject = "Parcel", .body = "Where is it?" };
+    const done = try h.workflow(HandleTicket).start(ticket);
+    try std.testing.expect(done.completed.sent);
+    try std.testing.expectEqual(0, h.remaining(ReplyCritic));
+    try std.testing.expectEqual(0, h.remaining(ReplyWriter));
 }
 
 test "notes saved by the first CustomerNotes still load" {

@@ -123,6 +123,10 @@ pub fn isParallel(comptime T: type) bool {
     return @TypeOf(T) == type and reflect.isContainer(T) and @hasDecl(T, "zastra_parallel");
 }
 
+pub fn isLoop(comptime T: type) bool {
+    return @TypeOf(T) == type and reflect.isContainer(T) and @hasDecl(T, "zastra_loop");
+}
+
 pub fn isSuspendable(comptime S: type) bool {
     return reflect.isContainer(S) and @hasDecl(S, "Suspend") and @hasDecl(S, "Resume");
 }
@@ -219,6 +223,9 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
         /// Internal: numbers this step's `w.agent(A).run` calls, for their
         /// saved run ids.
         agent_calls: u32 = 0,
+        /// Internal: `"@<i>"` per enclosing `z.step.loop` iteration, so a
+        /// saved agent run belongs to one iteration (D46).
+        iteration: []const u8 = "",
 
         /// Format into `arena`.
         pub fn fmt(w: *Self, comptime f: []const u8, args: anytype) Allocator.Error![]u8 {
@@ -268,7 +275,7 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
                     const w = c.w;
                     const n = w.agent_calls;
                     w.agent_calls += 1;
-                    const id = try std.fmt.allocPrint(w.arena, "{s}/{s}#{d}", .{ w.run_id, w.step_id, n });
+                    const id = try std.fmt.allocPrint(w.arena, "{s}/{s}{s}#{d}", .{ w.run_id, w.step_id, w.iteration, n });
                     var o = try c.options(opts);
                     o.run_id = id;
                     o.keep_result = true;
@@ -383,7 +390,7 @@ pub fn parallel(comptime branches: anytype) type {
         var id: []const u8 = "parallel";
         for (fields) |f| {
             const S = @field(branches, f.name);
-            if (@TypeOf(S) != type or isWorkflow(S) or isParallel(S)) errors.fail("z.step.parallel: `.{s}` must be a step type (workflows and nested parallel groups aren't supported inside parallel in v1)", .{f.name});
+            if (@TypeOf(S) != type or isWorkflow(S) or isParallel(S) or isLoop(S)) errors.fail("z.step.parallel: `.{s}` must be a step type (workflows, loops and nested parallel groups aren't supported inside parallel)", .{f.name});
             if (!@hasDecl(S, "Input")) errors.fail("z.step.parallel: `.{s}` ({s}) is not a step", .{ f.name, @typeName(S) });
             if (S.Input != First.Input) errors.fail("z.step.parallel: every branch must accept the same Input; `.{s}` takes {s}, but `.{s}` takes {s}", .{
                 f.name, @typeName(S.Input), fields[0].name, @typeName(First.Input),
@@ -403,6 +410,59 @@ pub fn parallel(comptime branches: anytype) type {
             pub const Output = Out;
             pub const name = final_id;
             pub const steps = branches;
+        };
+    }
+}
+
+pub const LoopLimit = enum {
+    /// Fail the run with `error.LoopLimit`.
+    fail,
+    /// Return the last iteration's value.
+    finish,
+};
+
+/// `z.step.loop(Body, .{ .until = done, .max = 5 })`: run `Body` (a step,
+/// a parallel group or a workflow whose Input equals its Output) until
+/// `until(value)` is true, at most `max` times (PLAN.md §18.3, D45). The
+/// body always runs at least once. `.on_limit = .finish` returns the last
+/// value when `max` is reached instead of failing with `error.LoopLimit`.
+pub fn loop(comptime Body: anytype, comptime opts: anytype) type {
+    comptime {
+        if (@TypeOf(Body) != type or !reflect.isContainer(Body) or !@hasDecl(Body, "Input") or !@hasDecl(Body, "Output"))
+            errors.fail("z.step.loop(Body, ...): Body must be a step, a parallel group or a workflow", .{});
+        reflect.checkConfigFields(@TypeOf(opts), &.{ "until", "max", "on_limit", "name" }, "z.step.loop(...) options");
+        const body_id = idOf(Body);
+        if (Body.Input != Body.Output)
+            errors.fail("z.step.loop: body '{s}' takes `{s}` but returns `{s}`; a loop feeds each iteration's output into the next, so they must match. Wrap the body in a workflow that ends with a step converting back to `{s}`", .{
+                body_id, reflect.shortTypeName(Body.Input), reflect.shortTypeName(Body.Output), reflect.shortTypeName(Body.Input),
+            });
+        if (!@hasField(@TypeOf(opts), "max"))
+            errors.fail("z.step.loop({s}, ...): `.max` is required (the most iterations to run); every loop must end. A bound decided at runtime goes in `.until`", .{body_id});
+        const max_iters = opts.max;
+        if (@typeInfo(@TypeOf(max_iters)) != .comptime_int and @typeInfo(@TypeOf(max_iters)) != .int)
+            errors.fail("z.step.loop({s}, ...): `.max` must be an integer", .{body_id});
+        if (max_iters < 1) errors.fail("z.step.loop({s}, ...): `.max` must be at least 1", .{body_id});
+        if (!@hasField(@TypeOf(opts), "until"))
+            errors.fail("z.step.loop({s}, ...): `.until` is required: `fn ({s}) bool`, checked after each iteration", .{ body_id, reflect.shortTypeName(Body.Output) });
+        const F = @TypeOf(opts.until);
+        const ok = switch (@typeInfo(F)) {
+            .@"fn" => |f| f.params.len == 1 and f.params[0].type == Body.Output and f.return_type == bool,
+            else => false,
+        };
+        if (!ok) errors.fail("z.step.loop({s}, ...): `.until` must be `fn ({s}) bool`, got {s}", .{ body_id, reflect.shortTypeName(Body.Output), @typeName(F) });
+        const on_limit: LoopLimit = if (@hasField(@TypeOf(opts), "on_limit")) opts.on_limit else .fail;
+        const loop_name: []const u8 = if (@hasField(@TypeOf(opts), "name")) opts.name else "loop_" ++ body_id;
+        return struct {
+            pub const zastra_loop = true;
+            pub const Input = Body.Input;
+            pub const Output = Body.Output;
+            pub const name = loop_name;
+            pub const body = Body;
+            pub const until = opts.until;
+            pub const max: u32 = max_iters;
+            pub const limit = on_limit;
+            /// Stored between iterations: how many finished, and the latest value.
+            pub const Progress = struct { iter: u32, value: Body.Output };
         };
     }
 }
