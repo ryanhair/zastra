@@ -62,12 +62,19 @@ jobs:
         run: mkdir -p "${ZIG_GLOBAL_CACHE_DIR:-$HOME/.cache/zig}/tmp"
       - name: size budgets (PLAN.md §5.6)
         run: zig build size
-      - name: compile time of the example (fails on a 2x regression, PLAN.md §12)
-        working-directory: examples/support
+      # Runner speed varies, so the baseline (v1.0.0) is built on the same
+      # runner, each build with fresh caches. Fails above 1.5x (PLAN.md §12).
+      - name: compile time of the example vs v1.0.0
         run: |
-          start=$(date +%s)
-          zig build -Doptimize=ReleaseSmall --cache-dir /tmp/fresh-cache
-          elapsed=$(( $(date +%s) - start ))
-          baseline=$(cat ../../tests/compile_time_baseline_seconds)
-          echo "compile time: ${elapsed}s (baseline ${baseline}s)"
-          test "$elapsed" -le $(( baseline * 2 ))
+          git fetch -q --depth=1 origin tag v1.0.0
+          git worktree add -q /tmp/base v1.0.0
+          measure() {
+            mkdir -p "$2/tmp"
+            ( cd "$1/examples/support" && start=$(date +%s) &&
+              zig build -Doptimize=ReleaseSmall --cache-dir "$2/local" --global-cache-dir "$2" >&2 &&
+              echo $(( $(date +%s) - start )) )
+          }
+          base=$(measure /tmp/base /tmp/cache-base)
+          head=$(measure "$PWD" /tmp/cache-head)
+          echo "compile time: ${head}s, v1.0.0 on this runner: ${base}s"
+          test $(( head * 2 )) -le $(( base * 3 ))

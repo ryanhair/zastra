@@ -917,7 +917,7 @@ Estimates assume one experienced Zig developer working focused time. The total i
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Comptime cost (compile time, eval branch quota) as Apps grow | Slow builds; quota errors that confuse users | Keep reflection linear; set `@setEvalBranchQuota` inside zastra with headroom; measure compile time of the example in CI and fail on 2× regressions; keep large data out of comptime. |
+| Comptime cost (compile time, eval branch quota) as Apps grow | Slow builds; quota errors that confuse users | Keep reflection linear; set `@setEvalBranchQuota` inside zastra with headroom; measure compile time of the example in CI against v1.0.0 built on the same runner (fresh caches) and fail above 1.5×; keep large data out of comptime. |
 | Compile-error quality | The main DX promise fails | Compile-fail tests are a release gate; message style guide (§7). |
 | Zig std churn (0.16 → 0.17) | Breakage | Pin 0.16; isolate `std.http` and `std.Io` usage behind `provider/http.zig` and a thin `io` shim; schedule a migration milestone after 0.17. |
 | `std.http.Client` / TLS gaps with provider endpoints | Blocks M2 | **Retired by the M0 spike** (§11): TLS and streaming work against both providers on 0.16.0. The remaining gaps (timeouts, retries, CA loading) are ours to build in `http.zig`. If a provider later needs something `std.http` can't do, the fallback is a C library behind `http.zig`; the interface doesn't change. |
@@ -1389,7 +1389,7 @@ It has bounds: depth 64 and 10k nodes visited per validation. Unknown keywords s
 
 - Update `sketch/` and the docs for every API change above, in the same commits as the code (CLAUDE.md).
 - Re-measure size budgets. Target: anthropic-only + memory stays under 700 KB; the full example stays under 2 MB.
-- `compile_time_baseline_seconds` stays within 25% of v1's 24 s.
+- Compile time stays within 25% of v1's. Measured 2026-10-15 with fresh caches on one machine: HEAD 27 s, v1.0.0 28 s (with only the local cache fresh: 26 s vs 24 s, +8%). A fixed baseline in seconds failed CI on slower runners (52 s), so CI now builds v1.0.0 on the same runner and compares.
 - CI green on all four targets.
 - Live runs on both providers.
 - Write a CHANGELOG with the breaking changes: the gated-agent result union, C ABI v2, the storage migration, and catalog OpenAI models moving to Responses.
