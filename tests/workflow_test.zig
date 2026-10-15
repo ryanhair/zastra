@@ -239,6 +239,90 @@ test "retries, and failures as values" {
     try t.expectEqual(error.Boom, f.failed.err);
 }
 
+const SlowOk = struct {
+    pub const Input = Triage;
+    pub const Output = Triage;
+    pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !Output {
+        try w.io.sleep(.fromSeconds(5), .awake);
+        _ = w.ctx.db.flaky_calls.fetchAdd(1, .monotonic);
+        return in;
+    }
+};
+const SlowFail = struct {
+    pub const Input = Triage;
+    pub const Output = Triage;
+    pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !Output {
+        _ = in;
+        try w.io.sleep(.fromMilliseconds(300), .awake);
+        return error.Late;
+    }
+};
+const FastFail = struct {
+    pub const Input = Triage;
+    pub const Output = Triage;
+    pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !Output {
+        _ = w;
+        _ = in;
+        return error.Boom;
+    }
+};
+const FastFail2 = struct {
+    pub const Input = Triage;
+    pub const Output = Triage;
+    pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !Output {
+        _ = w;
+        _ = in;
+        return error.Bang;
+    }
+};
+const CancelWf = z.Workflow(Ctx, "cancel_slow", Triage).then(z.step.parallel(.{ .fast = FastFail, .slow = SlowOk })).commit();
+const EarliestWf = z.Workflow(Ctx, "earliest", Triage).then(z.step.parallel(.{ .late = SlowFail, .fast = FastFail })).commit();
+const BothWf = z.Workflow(Ctx, "both_fail", Triage).then(z.step.parallel(.{ .a = FastFail, .b = FastFail2 })).commit();
+const App3 = z.App(.{ .ctx = Ctx, .workflows = .{ CancelWf, EarliestWf, BothWf } });
+
+fn expectParallelFailures(inline_branches: bool) !void {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App3, .{ .ctx = &ctx });
+    defer h.deinit();
+    const tr: Triage = .{ .category = .other, .urgency = 1, .summary = "s" };
+    const io = t.io;
+
+    // A failing branch cancels a slow sibling instead of waiting for it.
+    const t0 = std.Io.Clock.awake.now(io);
+    const r = try h.workflow(CancelWf).start(tr);
+    const elapsed_ms = t0.durationTo(std.Io.Clock.awake.now(io)).toMilliseconds();
+    try t.expectEqual(error.Boom, r.failed.err);
+    try t.expect(std.mem.endsWith(u8, r.failed.step, ".fast"));
+    try t.expect(elapsed_ms < 1000);
+    try t.expectEqual(@as(u32, 0), db.flaky_calls.load(.monotonic));
+
+    // The earliest failure in time is reported, not the first declared.
+    if (!inline_branches) {
+        const e = try h.workflow(EarliestWf).start(tr);
+        try t.expectEqual(error.Boom, e.failed.err);
+        try t.expect(std.mem.endsWith(u8, e.failed.step, ".fast"));
+    }
+
+    // Two branches failing at once: exactly one is reported.
+    for (0..20) |_| {
+        const b = try h.workflow(BothWf).start(tr);
+        try t.expect(b.failed.err == error.Boom or b.failed.err == error.Bang);
+        try t.expect(std.mem.indexOf(u8, b.failed.message, @errorName(b.failed.err)) != null);
+    }
+}
+
+test "parallel: the first failure cancels siblings (D47)" {
+    try expectParallelFailures(false);
+}
+
+test "parallel: branches run inline when concurrency is unavailable" {
+    const saved = t.io_instance.concurrent_limit;
+    t.io_instance.concurrent_limit = .nothing;
+    defer t.io_instance.concurrent_limit = saved;
+    try expectParallelFailures(true);
+}
+
 test "mermaid" {
     try t.expect(std.mem.indexOf(u8, HandleTicket.mermaid, "flowchart TD") != null);
     try t.expect(std.mem.indexOf(u8, HandleTicket.mermaid, "approve_refund") != null);

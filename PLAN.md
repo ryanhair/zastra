@@ -683,7 +683,7 @@ Parallel:
 - `z.step.parallel(.{ .a = A, .b = B })` runs its branches with `io.async`.
 - Its Output is a struct with fields `a: A.Output` and `b: B.Output`.
 - Each branch gets its own arena; outputs are copied into the run's arena on join (same reason as §6.4).
-- If any branch fails, the step fails with the first error (in declaration order) after all branches finish. Cancelling siblings early is v1.1 (branches only observe cancellation at `std.Io` cancellation points anyway).
+- If any branch fails, the others are canceled and the step fails with the earliest failure in time (D47, §18.1). Branches observe cancellation at `std.Io` cancellation points (HTTP, sleeps, storage).
 - Steps inside a parallel group can't suspend (compile error), and nested workflows can't be parallel branches in v1.
 
 Runner:
@@ -1451,6 +1451,16 @@ v1.1b is the four developer-experience items from §17's table. It changes no wi
 - Two branches failing at the same moment: no data race (run under the thread sanitizer on Linux), and exactly one is reported.
 - Tests pass with the async limit forced to 1 (the inline path), as the MCP tests do.
 - CHANGELOG notes the reporting change (earliest failure instead of declaration order).
+
+**Implemented (N7, 2026-10-15):**
+- Branches start with `Group.concurrent`. When concurrency is unavailable, they run inline and the remaining branches are skipped after a failure. A shared join (mutex, event, remaining count, first failure) wakes the joiner on the first failure or the last finish. The joiner then calls `group.cancel` or `group.await`.
+- Each branch runs on a copy of `X` with its own arena, so `x.fail` writes only to that branch's slot. The joiner copies the winning failure into the run, duplicating the message into the run's arena.
+- Errors from a branch canceled by a sibling are ignored.
+- `error.Canceled` is never retried. Without this, a canceled step under `z.Retry` re-ran: Io reports cancellation once.
+- The diagnostic is read under its mutex (`State.diagCopy`). It stays App-wide, not per branch: per-branch diagnostics would need agent API changes for little gain, since only the winning branch's message is reported.
+- Not done: a `canceled_by` trace attribute. Canceled branches' spans fail with `Canceled`, which is enough.
+- Tests (`tests/workflow_test.zig`): a fast failure cancels a 5 s sibling (the run takes under 1 s, and the sibling never finishes); the earliest failure wins over the first declared; simultaneous failures report exactly one. The same tests run with `concurrent_limit = .nothing` (inline).
+- The integration suite passes under ThreadSanitizer on macOS (`sanitize_thread` set temporarily in `build.zig`). The v1 runner failed the new tests, but ThreadSanitizer didn't report its race in that run, so the race fix rests on the code change, not on a sanitizer finding.
 
 ### 18.2 N8: working-memory migrations (D48)
 

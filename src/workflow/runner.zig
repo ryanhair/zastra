@@ -367,10 +367,12 @@ fn Exec(comptime W: type) type {
                         },
                     } else return res;
                 } else |err| {
-                    const retryable = if (@hasDecl(S, "retry_on")) inSet(S.retry_on, err) else true;
+                    // Cancellation (of the run, or by a failed parallel sibling) is
+                    // never retried: Io reports it once, so a retry would run on.
+                    const retryable = err != error.Canceled and if (@hasDecl(S, "retry_on")) inSet(S.retry_on, err) else true;
                     if (!retryable or attempt + 1 >= retry.attempts) {
                         span.fail(@errorName(err));
-                        const diag = x.st.diag.message();
+                        const diag = x.st.diagCopy(arena);
                         return x.fail(path, err, "workflow '{s}': step '{s}' failed: {t}{s}{s}", .{ W.id, path, err, if (diag.len > 0) " — " else "", diag });
                     }
                     span.attr("retries", attempt + 1);
@@ -432,41 +434,105 @@ fn Exec(comptime W: type) type {
             return false;
         }
 
+        /// Run a parallel group's branches concurrently (PLAN.md §18.1, D47).
+        /// The first branch failure cancels the others; the step reports the
+        /// earliest real failure. Each branch works on its own copy of `X`
+        /// with its own arena, so branches never write shared run state.
         fn execParallel(comptime P: type, comptime path: []const u8, comptime avail: []const Avail, comptime Initial: type, x: *X, initial: Initial, input: P.Input) Flow!P.Output {
             const fields = std.meta.fields(@TypeOf(P.steps));
+            const io = x.st.io;
             const Slot = struct {
                 arena: std.heap.ArenaAllocator,
+                /// The branch's view of the run; failures are written here.
+                x: X = undefined,
                 json_out: []const u8 = "",
-                err: ?anyerror = null,
                 flow: ?Flow = null,
             };
+            const Join = struct {
+                mutex: std.Io.Mutex = .init,
+                /// Set when a branch fails or the last branch finishes.
+                event: std.Io.Event = .unset,
+                remaining: usize = fields.len,
+                /// The earliest branch to fail for a reason other than
+                /// being canceled by a sibling.
+                first: ?usize = null,
+
+                fn finish(j: *@This(), jio: std.Io, i: usize, failed: bool) void {
+                    j.mutex.lockUncancelable(jio);
+                    defer j.mutex.unlock(jio);
+                    if (failed and j.first == null) {
+                        j.first = i;
+                        j.event.set(jio);
+                    }
+                    j.remaining -= 1;
+                    if (j.remaining == 0) j.event.set(jio);
+                }
+
+                fn anyFailed(j: *@This(), jio: std.Io) bool {
+                    j.mutex.lockUncancelable(jio);
+                    defer j.mutex.unlock(jio);
+                    return j.first != null;
+                }
+            };
             var slots: [fields.len]Slot = undefined;
-            for (&slots) |*s| s.* = .{ .arena = .init(x.st.gpa) };
+            for (&slots) |*s| {
+                s.* = .{ .arena = .init(x.st.gpa) };
+                s.x = x.*;
+                s.x.arena = s.arena.allocator();
+            }
             defer for (&slots) |*s| s.arena.deinit();
+            var joint: Join = .{};
 
             var group: std.Io.Group = .init;
             inline for (fields, 0..) |f, i| {
                 const S = @field(P.steps, f.name);
                 const Task = struct {
-                    fn go(xx: *X, slot: *Slot, init_v: Initial, in: P.Input) void {
+                    fn go(slot: *Slot, j: *Join, init_v: Initial, in: P.Input) void {
                         const child_path = comptime path ++ "." ++ f.name;
-                        const out = execPlain(S, child_path, avail, Initial, xx, init_v, in, slot.arena.allocator()) catch |e| {
+                        const xx = &slot.x;
+                        const out = execPlain(S, child_path, avail, Initial, xx, init_v, in, xx.arena) catch |e| {
                             slot.flow = e;
+                            // Canceled because a sibling failed first: not a failure of its own.
+                            const by_sibling = e == error.WorkflowStepFailed and xx.failed_err == error.Canceled and j.anyFailed(xx.st.io);
+                            j.finish(xx.st.io, i, !by_sibling);
                             return;
                         };
-                        slot.json_out = json.stringifyAlloc(slot.arena.allocator(), out) catch {
+                        slot.json_out = json.stringifyAlloc(xx.arena, out) catch {
                             slot.flow = error.OutOfMemory;
+                            j.finish(xx.st.io, i, true);
                             return;
                         };
+                        j.finish(xx.st.io, i, false);
                     }
                 };
-                group.async(x.st.io, Task.go, .{ x, &slots[i], initial, input });
+                if (joint.anyFailed(io)) {
+                    // Only reachable when branches run inline: skip the rest.
+                    joint.finish(io, i, false);
+                } else {
+                    group.concurrent(io, Task.go, .{ &slots[i], &joint, initial, input }) catch
+                        Task.go(&slots[i], &joint, initial, input);
+                }
             }
-            group.await(x.st.io) catch return x.fail(path, error.Canceled, "workflow '{s}': parallel step '{s}' canceled", .{ W.id, path });
+            joint.event.wait(io) catch {
+                group.cancel(io);
+                return x.fail(path, error.Canceled, "workflow '{s}': parallel step '{s}' canceled", .{ W.id, path });
+            };
+            if (joint.anyFailed(io)) group.cancel(io) else group.await(io) catch {
+                group.cancel(io);
+                return x.fail(path, error.Canceled, "workflow '{s}': parallel step '{s}' canceled", .{ W.id, path });
+            };
 
+            if (joint.first) |fi| {
+                const slot = &slots[fi];
+                const e = slot.flow.?;
+                if (e != error.WorkflowStepFailed) return e;
+                x.failed_step = slot.x.failed_step;
+                x.failed_err = slot.x.failed_err;
+                x.failed_msg = try x.arena.dupe(u8, slot.x.failed_msg);
+                return error.WorkflowStepFailed;
+            }
             var out: P.Output = undefined;
             inline for (fields, 0..) |f, i| {
-                if (slots[i].flow) |e| return e;
                 const S = @field(P.steps, f.name);
                 var issue: parse.Issue = .{};
                 @field(out, f.name) = parse.parse(S.Output, x.arena, slots[i].json_out, &issue) catch

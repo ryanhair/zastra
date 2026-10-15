@@ -53,6 +53,14 @@ pub const State = struct {
         s.diag.print(0, fmt, args);
     }
 
+    /// The last diagnostic message, copied under the lock (parallel
+    /// workflow branches read it while others may be writing).
+    pub fn diagCopy(s: *State, arena: Allocator) []const u8 {
+        s.diag_mutex.lockUncancelable(s.io);
+        defer s.diag_mutex.unlock(s.io);
+        return arena.dupe(u8, s.diag.message()) catch "";
+    }
+
     pub fn nowMs(s: *const State) i64 {
         if (s.clock_ms) |f| return f();
         return @intCast(@divFloor(Io.Clock.real.now(s.io).nanoseconds, std.time.ns_per_ms));

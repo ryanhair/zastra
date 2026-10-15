@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (v1.2.0)
+
+### Changed
+- **`z.step.parallel` failures:** the first failing branch cancels the others instead of waiting for them, and the step reports the earliest failure in time rather than the first in declaration order (D47).
+
+### Fixed
+- Two parallel branches failing at the same moment raced on the run's failure fields and arena.
+- A step canceled mid-run was retried under its `z.Retry` policy; cancellation is no longer retried.
+
 ## v1.1.0 (2026-10-15)
 
 ### Breaking changes
