@@ -86,4 +86,10 @@ pub const reasoning_agents = struct {
     pub const sonnet5_off = z.Agent(Ctx, .{ .name = "sonnet5_off", .model = "anthropic/claude-sonnet-5", .reasoning = .off, .effort = .high });
     pub const haiku45_budget = z.Agent(Ctx, .{ .name = "haiku45_budget", .model = "anthropic/claude-haiku-4-5", .reasoning = .{ .budget = 2_048 }, .show_reasoning = true });
     pub const gpt5mini_on = z.Agent(Ctx, .{ .name = "gpt5mini_on", .model = "openai/gpt-5-mini", .reasoning = .on, .effort = .low });
+    pub const gpt5mini_show = z.Agent(Ctx, .{ .name = "gpt5mini_show", .model = "openai/gpt-5-mini", .show_reasoning = true });
+    pub const gpt54mini_default = z.Agent(Ctx, .{ .name = "gpt54mini_default", .model = "openai/gpt-5.4-mini" });
+    pub const gpt54mini_on = z.Agent(Ctx, .{ .name = "gpt54mini_on", .model = "openai/gpt-5.4-mini", .reasoning = .on, .show_reasoning = true });
+    pub const gpt55_off = z.Agent(Ctx, .{ .name = "gpt55_off", .model = "openai/gpt-5.5", .reasoning = .off });
+    pub const gpt55_max = z.Agent(Ctx, .{ .name = "gpt55_max", .model = "openai/gpt-5.5", .effort = .max });
+    pub const gpt51_max = z.Agent(Ctx, .{ .name = "gpt51_max", .model = "openai/gpt-5.1", .effort = .max });
 };

@@ -6,8 +6,9 @@ const errors = @import("../meta/errors.zig");
 const reflect = @import("../meta/reflect.zig");
 const table = @import("models.zig");
 
-/// Wire protocol a model speaks.
-pub const Api = enum { anthropic, openai_compat };
+/// Wire protocol a model speaks: Anthropic Messages, OpenAI Responses
+/// (catalog OpenAI models), or Chat Completions (OpenAI-compatible servers).
+pub const Api = enum { anthropic, openai_responses, openai_compat };
 
 pub const ProviderInfo = struct {
     name: []const u8,
@@ -46,12 +47,15 @@ pub const ReasoningModes = struct {
     disable_only_up_to_high: bool = false,
     /// The model reasons when the request doesn't mention it.
     default_on: bool = false,
-    /// Readable reasoning can be streamed (Anthropic summaries, or
-    /// `reasoning_content` from OpenAI-compatible servers).
+    /// Readable reasoning can be streamed (Anthropic and OpenAI Responses
+    /// summaries, or `reasoning_content` from OpenAI-compatible servers).
     visible: bool = false,
-    /// Readable reasoning is opt-in through `display: "summarized"`;
-    /// without it, thinking blocks arrive with empty text.
+    /// Readable reasoning is opt-in (Anthropic `display: "summarized"`,
+    /// OpenAI `reasoning.summary`); without it, none arrives.
     display_param: bool = false,
+    /// OpenAI accepts effort `"xhigh"`. Without it, `.effort = .xhigh` and
+    /// `.max` are sent as `"high"`.
+    xhigh_effort: bool = false,
 };
 
 /// USD per million tokens.
@@ -161,7 +165,7 @@ pub fn resolve(comptime m: anytype, comptime who: []const u8) Spec {
             .max_output = row.max_output,
             .supports = row.supports,
             .pricing = row.pricing,
-            .max_tokens_field = if (info.api == .openai_compat) .max_completion_tokens else .max_tokens,
+            .max_tokens_field = if (info.api == .anthropic) .max_tokens else .max_completion_tokens,
         };
     }
 }
@@ -169,7 +173,7 @@ pub fn resolve(comptime m: anytype, comptime who: []const u8) Spec {
 /// `z.custom(...)`: a model the catalog doesn't know.
 ///
 ///     .model = z.custom(.{
-///         .provider = .openai_compat,
+///         .provider = .openai_compat, // or .anthropic, .openai_responses
 ///         .id = "llama-3.3-70b",
 ///         .base_url = "https://api.groq.com/openai/v1",
 ///         .api_key_env = "GROQ_API_KEY",
@@ -182,11 +186,12 @@ pub fn custom(comptime opts: anytype) Spec {
             "provider", "id",         "base_url", "api_key_env", "name", "supports", "context_window",
             "max_output", "pricing", "max_tokens_field", "headers",
         }, "z.custom(...)");
-        if (!@hasField(O, "provider")) errors.fail("z.custom(...) needs `.provider` (.anthropic or .openai_compat)", .{});
+        if (!@hasField(O, "provider")) errors.fail("z.custom(...) needs `.provider` (.anthropic, .openai_responses or .openai_compat)", .{});
         if (!@hasField(O, "id")) errors.fail("z.custom(...) needs `.id`, the model ID sent to the API", .{});
         const api: Api = opts.provider;
         const base_url: []const u8 = if (@hasField(O, "base_url")) opts.base_url else switch (api) {
             .anthropic => "https://api.anthropic.com",
+            .openai_responses => "https://api.openai.com/v1",
             .openai_compat => errors.fail("z.custom(...) with `.provider = .openai_compat` needs `.base_url`, e.g. \"https://api.groq.com/openai/v1\"", .{}),
         };
         var supports: Supports = .{};
@@ -194,7 +199,11 @@ pub fn custom(comptime opts: anytype) Spec {
             reflect.checkConfigFields(@TypeOf(opts.supports), reflect.fieldNames(Supports), "z.custom(...).supports");
             if (@hasField(@TypeOf(opts.supports), "reasoning_modes"))
                 reflect.checkConfigFields(@TypeOf(opts.supports.reasoning_modes), reflect.fieldNames(ReasoningModes), "z.custom(...).supports.reasoning_modes");
-            for (std.meta.fields(@TypeOf(opts.supports))) |f| @field(supports, f.name) = @field(opts.supports, f.name);
+            for (std.meta.fields(@TypeOf(opts.supports))) |f| {
+                if (std.mem.eql(u8, f.name, "reasoning_modes")) {
+                    for (std.meta.fields(f.type)) |rf| @field(supports.reasoning_modes, rf.name) = @field(opts.supports.reasoning_modes, rf.name);
+                } else @field(supports, f.name) = @field(opts.supports, f.name);
+            }
         }
         return .{
             .provider = if (@hasField(O, "name")) opts.name else "custom",
@@ -237,6 +246,7 @@ test resolve {
     try std.testing.expectEqual(Api.anthropic, s.api);
     try std.testing.expectEqualStrings("ANTHROPIC_API_KEY", s.api_key_env.?);
     const o = comptime resolve("openai/gpt-5-mini", "test");
+    try std.testing.expectEqual(Api.openai_responses, o.api);
     try std.testing.expect(o.supports.structured_output);
     try std.testing.expectEqual(MaxTokensField.max_completion_tokens, o.max_tokens_field);
     const c = comptime custom(.{ .provider = .openai_compat, .id = "llama3", .base_url = "http://localhost:11434/v1", .supports = .{ .tools = true } });

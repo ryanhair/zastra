@@ -27,7 +27,7 @@ A Mastra-style agent framework for Zig. It covers agents, tools, workflows, memo
    - comptime-derived schemas, prompts, request prefixes and workflow graphs
    - binaries that contain only what the App uses
    - one App that produces an executable, a dev CLI, a C library with a generated header, and a test harness
-4. **Two providers:** Anthropic Messages and OpenAI-compatible Chat Completions. The second also covers OpenRouter, Groq, Together, Ollama and vLLM.
+4. **Providers:** Anthropic Messages, the OpenAI Responses API for catalog OpenAI models (v1.1, D35), and OpenAI-compatible Chat Completions, which also covers OpenRouter, Groq, Together, Ollama and vLLM.
 
 ### Non-goals (v1)
 
@@ -166,7 +166,8 @@ zastra/
       http.zig                     # std.http.Client wrapper, retries, timeouts, CA bundle (D12)
       sse.zig                      # Server-Sent Events parser
       anthropic.zig
-      openai_compat.zig
+      openai_responses.zig         # catalog OpenAI models (D35)
+      openai_compat.zig            # Chat Completions servers
     prompt/
       template.zig                 # comptime-checked "{field}" templates
       prefix.zig                   # comptime request-prefix serialization
@@ -567,7 +568,7 @@ OpenAI-compatible:
 - `tool_calls[].function.arguments` delta accumulation keyed by index
 - `response_format: json_schema` (strict) when the model supports it
 - configurable `base_url` and header map, for OpenRouter and other compatible services
-- known limitation: Chat Completions doesn't return reasoning items for OpenAI reasoning models, so they can't round-trip across tool steps. The Responses API is a candidate third dialect in v1.1.
+- known limitation: Chat Completions doesn't return reasoning items for OpenAI reasoning models, so they can't round-trip across tool steps. Since v1.1, catalog OpenAI models use the Responses API instead (§17.2, D35).
 
 Configuration:
 - Environment variables per provider: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`. A per-model override is allowed via `z.custom`.
@@ -967,7 +968,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D34 | Gated agents in workflow steps | `z.step.agent` with a gated agent becomes suspendable automatically (`z.Approvals(A)` / `z.Decisions(A)`); custom steps use `w.agent(A).run`, which resumes the saved agent run on replay. Parallel branches still can't suspend. Supersedes D18's compile error. (§17.4) |
 | D35 | OpenAI API | Catalog `openai/*` models use the Responses API, with `store: false`; `openai_compat` (Chat Completions) remains for third-party servers. (§17.2) |
 | D36 | OpenAI reasoning items | Round-tripped within a run as opaque blocks; dropped from history loaded across runs, like D30, until live evidence says otherwise. (§17.2) |
-| D37 | Reasoning control | `.reasoning` = `.default`, `.on`, `.off` or `.{ .budget = N }` and `.show_reasoning`, mapped per model at comptime from catalog capabilities; impossible combinations are compile errors. (§17.1) |
+| D37 | Reasoning control | `.reasoning` = `.default`, `.on`, `.off` or `.{ .budget = N }` and `.show_reasoning`, mapped per model at comptime from catalog capabilities; impossible combinations are compile errors. On OpenAI Responses, `.on` is an effort (`.effort` or `medium`), `.off` is effort `none`, `.show_reasoning` is `summary: "auto"`, and `.effort = .xhigh`/`.max` send `xhigh` only where the catalog says the model accepts it. (§17.1, §17.2) |
 | D38 | MCP client era and auth | Dual-era: 2026-07-28 first, falling back to 2025-11-25 `initialize` on stdio and HTTP; HTTP+SSE (2024-11-05) unsupported. No sampling/elicitation/roots (`InputRequiredResult` becomes a tool error). HTTP auth is static headers and a bearer token from the env; OAuth deferred. (§17.5) |
 | D39 | MCP tool list refresh | Via `subscriptions/listen`, legacy `list_changed` notifications, or `ttlMs`; applied at the next run start, tools sorted for stable prefixes. (§17.5) |
 | D40 | MCP schema validation | Adds local `$ref`, `allOf`, conditionals and `prefixItems` with depth/size bounds; unsupported schemas skip validation with a warning instead of hiding the tool. (§17.5) |
@@ -1162,6 +1163,8 @@ It writes them over `sources.json`, prints a diff, and fails if a field disagree
 
 **Problem.** Chat Completions doesn't return reasoning items, so OpenAI reasoning models lose their reasoning between tool steps. Responses is OpenAI's recommended API. Chat Completions stays supported.
 
+**Live finding (2026-10-15).** On Chat Completions, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano and gpt-5.5 reject function tools combined with `reasoning_effort` with a 400: "Function tools with reasoning_effort are not supported for {model} in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'." gpt-5-mini and gpt-5.2 accept it. So in v1, an agent with `.tools` and `.effort` on a newer OpenAI model fails at runtime. N2 fixes this by moving catalog `openai/*` models to Responses. Everything else passed live on OpenAI: native and fallback structured output, and a streamed tool loop with memory across turns.
+
 **Design:**
 - **Dialect.** New file `provider/openai_responses.zig`, a third `api` alongside `anthropic` and `openai_compat`, behind the same `Impl` interface.
 - **Which models use it.** Catalog `openai/*` models switch to it. `openai_compat` stays for `z.custom` third-party servers (Groq, OpenRouter, Ollama, vLLM). `z.custom(.{ .provider = .openai_responses, ... })` is allowed.
@@ -1184,6 +1187,16 @@ It writes them over `sources.json`, prints a diff, and fails if a field disagree
 - Hand-written cassettes for text, tool loops, reasoning round-trip, structured output, refusal, incomplete and error, then replaced by recorded ones.
 - Golden prefixes and the support example's tests passing.
 - A live run on a catalog OpenAI reasoning model with a two-step tool loop, showing reasoning items sent back.
+
+**Implemented (N2, 2026-10-15):**
+- `provider/openai_responses.zig`; `catalog.Api.openai_responses`; the catalog's `openai` provider uses it. `z.custom(.{ .provider = .openai_responses })` defaults `base_url` to OpenAI.
+- Reasoning items become `.reasoning` blocks: summary text as `text`, `encrypted_content` as `signature`, taken from `output_item.done` (the copy in `output_item.added` differs and doesn't round-trip). Blocks without encrypted content aren't sent. D36 falls out of D30's existing filter.
+- Tools are always sent with an explicit `strict`, since Responses defaults it to true. `max_output_tokens` is clamped to the API's minimum of 16. `prompt_cache_key` is `zastra-<prefix hash>`. The working-memory suffix is a `developer` message.
+- `catalog.ReasoningModes.xhigh_effort`. OpenAI `reasoning_modes` were probed live for every catalog model: gpt-5.1 to gpt-5.4 default to effort `none` (so `default_on = false`); gpt-5.1 and later except gpt-6-astra and gpt-6.1-sol accept `none`; gpt-5.2 and later accept `xhigh`; gpt-5, gpt-5-mini, gpt-5-nano, o3 and o4-mini accept neither.
+- Cassettes recorded from the live API (text, tool step and its follow-up, summaries, structured output, incomplete, 400 error), trimmed; refusal and `response.failed` are hand-written, since neither could be triggered on demand.
+- An agent test for D36 on OpenAI, 7 OpenAI golden prefixes, 2 new compile-fail cases (`.off` with `.effort`; `.show_reasoning` on a model that reasons only when asked). Fixed on the way: `z.custom(.{ .supports = .{ .reasoning_modes = .{...} } })` didn't compile.
+- Live (gpt-5.4-mini through zastra, requests captured by a logging proxy): native and fallback structured output; a streamed three-step tool loop at `.effort = .medium` with `.show_reasoning`, where both steps' reasoning items went back and the next run's request had none; tools with `.effort` (the Chat Completions 400 above) now work; prompt caching reported 4096 and 2048 cached tokens on a longer prompt, including across runs.
+- Size: `both_sqlite` 1,511,712 B, `full` 1,559,496 B (slightly smaller than with Chat Completions).
 
 ### 17.3 N3: saved agent runs and approvals (D9, D31–D33)
 

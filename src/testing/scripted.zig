@@ -36,7 +36,8 @@ pub fn Step(comptime A: type) type {
         }
 
         /// `step`, preceded by reasoning (Anthropic thinking with a signature,
-        /// or `reasoning_content` on OpenAI-compatible servers).
+        /// an OpenAI reasoning item with a summary and encrypted content, or
+        /// `reasoning_content` on OpenAI-compatible servers).
         pub fn withReasoning(r: []const u8, step: Self) Self {
             var s = step;
             s.reasoning = r;
@@ -125,6 +126,7 @@ pub fn render(comptime A: type, gpa: Allocator, step: Step(A), n: usize) ![]u8 {
     }
     switch (A.model.api) {
         .anthropic => try anthropic(w, step.reasoning, b.text, b.tools, n),
+        .openai_responses => try responses(w, step.reasoning, b.text, b.tools, n),
         .openai_compat => try openai(w, step.reasoning, b.text, b.tools, n),
     }
     return aw.toOwnedSlice();
@@ -195,4 +197,37 @@ fn openai(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const 
     try w.print("data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"{s}\"}}]}}\n\n", .{if (tools.len > 0) "tool_calls" else "stop"});
     try w.writeAll("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n");
     try w.writeAll("data: [DONE]\n\n");
+}
+
+fn responses(w: *Writer, reasoning: ?[]const u8, text: ?[]const u8, tools: []const Tool, n: usize) !void {
+    try data(w, "response.created", "{{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_scripted_{d}\",\"status\":\"in_progress\",\"output\":[]}}}}", .{n});
+    var idx: usize = 0;
+    if (reasoning) |r| {
+        try data(w, "response.output_item.added", "{{\"type\":\"response.output_item.added\",\"output_index\":{d},\"item\":{{\"id\":\"rs_scripted_{d}\",\"type\":\"reasoning\",\"summary\":[]}}}}", .{ idx, n });
+        try data(w, "response.reasoning_summary_part.added", "{{\"type\":\"response.reasoning_summary_part.added\",\"output_index\":{d},\"summary_index\":0}}", .{idx});
+        try w.print("event: response.reasoning_summary_text.delta\ndata: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":{d},\"summary_index\":0,\"delta\":", .{idx});
+        try json.writeString(r, w);
+        try w.writeAll("}\n\n");
+        try data(w, "response.output_item.done", "{{\"type\":\"response.output_item.done\",\"output_index\":{d},\"item\":{{\"id\":\"rs_scripted_{d}\",\"type\":\"reasoning\",\"encrypted_content\":\"enc_scripted_{d}\"}}}}", .{ idx, n, n });
+        idx += 1;
+    }
+    if (text) |t| {
+        try data(w, "response.output_item.added", "{{\"type\":\"response.output_item.added\",\"output_index\":{d},\"item\":{{\"id\":\"msg_scripted_{d}\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}}}", .{ idx, n });
+        try w.print("event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"output_index\":{d},\"content_index\":0,\"delta\":", .{idx});
+        try json.writeString(t, w);
+        try w.writeAll("}\n\n");
+        try data(w, "response.output_item.done", "{{\"type\":\"response.output_item.done\",\"output_index\":{d},\"item\":{{\"type\":\"message\"}}}}", .{idx});
+        idx += 1;
+    }
+    for (tools, 0..) |t, i| {
+        try w.print("event: response.output_item.added\ndata: {{\"type\":\"response.output_item.added\",\"output_index\":{d},\"item\":{{\"type\":\"function_call\",\"call_id\":\"call_scripted_{d}_{d}\",\"arguments\":\"\",\"name\":", .{ idx, n, i });
+        try json.writeString(t.name, w);
+        try w.writeAll("}}\n\n");
+        try w.print("event: response.function_call_arguments.delta\ndata: {{\"type\":\"response.function_call_arguments.delta\",\"output_index\":{d},\"delta\":", .{idx});
+        try json.writeString(t.args, w);
+        try w.writeAll("}\n\n");
+        try data(w, "response.output_item.done", "{{\"type\":\"response.output_item.done\",\"output_index\":{d},\"item\":{{\"type\":\"function_call\"}}}}", .{idx});
+        idx += 1;
+    }
+    try data(w, "response.completed", "{{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_scripted_{d}\",\"status\":\"completed\",\"usage\":{{\"input_tokens\":10,\"input_tokens_details\":{{\"cached_tokens\":0}},\"output_tokens\":5}}}}}}", .{n});
 }

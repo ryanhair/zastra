@@ -26,5 +26,23 @@ haiku45_budget (reasoning_delta):
 {"model":"claude-haiku-4-5","stream":true,"thinking":{"type":"enabled","budget_tokens":2048},"cache_control":{"type":"ephemeral"}
 
 gpt5mini_on:
-{"model":"gpt-5-mini","stream":true,"stream_options":{"include_usage":true},"reasoning_effort":"low","messages":[
+{"model":"gpt-5-mini","stream":true,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"effort":"low"},"input":[
+
+gpt5mini_show (reasoning_delta):
+{"model":"gpt-5-mini","stream":true,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"summary":"auto"},"input":[
+
+gpt54mini_default:
+{"model":"gpt-5.4-mini","stream":true,"store":false,"include":["reasoning.encrypted_content"],"input":[
+
+gpt54mini_on (reasoning_delta):
+{"model":"gpt-5.4-mini","stream":true,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"effort":"medium","summary":"auto"},"input":[
+
+gpt55_off:
+{"model":"gpt-5.5","stream":true,"store":false,"reasoning":{"effort":"none"},"input":[
+
+gpt55_max:
+{"model":"gpt-5.5","stream":true,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"effort":"xhigh"},"input":[
+
+gpt51_max:
+{"model":"gpt-5.1","stream":true,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"effort":"high"},"input":[
 

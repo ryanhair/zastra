@@ -41,7 +41,7 @@ pub fn buildPrefix(comptime parts: p.PrefixParts) p.Prefix {
             j = j ++ ",\"output_config\":{" ++ oc ++ "}";
         }
         if (parts.reasoning) |r| j = j ++ ",\"thinking\":" ++ switch (r) {
-            .adaptive => |a| if (a.summarized) "{\"type\":\"adaptive\",\"display\":\"summarized\"}" else "{\"type\":\"adaptive\"}",
+            .on => |a| if (a.summarized) "{\"type\":\"adaptive\",\"display\":\"summarized\"}" else "{\"type\":\"adaptive\"}",
             .budget => |n| std.fmt.comptimePrint("{{\"type\":\"enabled\",\"budget_tokens\":{d}}}", .{n}),
             .disabled => "{\"type\":\"disabled\"}",
         };

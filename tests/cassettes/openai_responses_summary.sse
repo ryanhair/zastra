@@ -1,0 +1,72 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_045288f15793708d016ad077c96fb887d0abd081efe90ce04b","status":"in_progress","model":"gpt-5.4-mini-2026-03-17","incomplete_details":null,"error":null,"usage":null},"sequence_number":0}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_045288f15793708d016ad077c96fb887d0abd081efe90ce04b","status":"in_progress","model":"gpt-5.4-mini-2026-03-17","incomplete_details":null,"error":null,"usage":null},"sequence_number":1}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","type":"reasoning","content":[],"encrypted_content":"gAAAAABq0HfJFKpnVWeb8Mrj","summary":[]},"output_index":0,"sequence_number":2}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"part":{"type":"summary_text","text":""},"sequence_number":3,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"**Summarizing answers briefly**\n\nI need to answer two questions clearly. The first is the","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":4,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" classic bat and ball problem where the ball costs 5 cents and","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":16,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" the bat costs $1.05. The second question is","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":28,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" about counting primes below 50. The primes in that range are","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":40,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 2, 3, 5, 7, 11, 13,","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":52,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 17, 19, 23, 29, 31, 37,","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":64,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":" 41, 43, and 47, totaling 15 primes. I","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":76,"summary_index":0}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"’ll keep it concise!","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":88,"summary_index":0}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"sequence_number":93,"summary_index":0,"text":"**Summarizing answers briefly**\n\nI need to answer two questions clearly. The first is the classic bat and ball problem where the ball costs 5 cents and the bat costs $1.05. The second question is about counting primes below 50. The primes in that range are 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, and 47, totaling 15 primes. I’ll keep it concise!"}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","item_id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","output_index":0,"part":{"type":"summary_text","text":"**Summarizing answers briefly**\n\nI need to answer two questions clearly. The first is the classic bat and ball problem where the ball costs 5 cents and the bat costs $1.05. The second question is about counting primes below 50. The primes in that range are 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, and 47, totaling 15 primes. I’ll keep it concise!"},"sequence_number":94,"summary_index":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"rs_045288f15793708d016ad077c9f18887d0b16926a8341705d6","type":"reasoning","content":[],"encrypted_content":"gAAAAABq0HfLSpIRf9lgW4UW","summary":[{"type":"summary_text","text":"**Summarizing answers briefly**\n\nI need to answer two questions clearly. The first is the classic bat and ball problem where the ball costs 5 cents and the bat costs $1.05. The second question is about counting primes below 50. The primes in that range are 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, and 47, totaling 15 primes. I’ll keep it concise!"}]},"output_index":0,"sequence_number":95}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","type":"message","status":"in_progress","content":[],"phase":"final_answer","role":"assistant"},"output_index":1,"sequence_number":96}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","content_index":0,"item_id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","output_index":1,"part":{"type":"output_text","text":""},"sequence_number":97}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":"The ball costs **$0.05** and the bat","item_id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","output_index":1,"sequence_number":98}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":" costs **$1.05**.  \nThere are **","item_id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","output_index":1,"sequence_number":110}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","content_index":0,"delta":"15 primes below 50**.","item_id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","output_index":1,"sequence_number":122}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","content_index":0,"item_id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","output_index":1,"sequence_number":129,"text":"The ball costs **$0.05** and the bat costs **$1.05**.  \nThere are **15 primes below 50**."}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","content_index":0,"item_id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","output_index":1,"part":{"type":"output_text","text":"The ball costs **$0.05** and the bat costs **$1.05**.  \nThere are **15 primes below 50**."},"sequence_number":130}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"msg_045288f15793708d016ad077cbaa8087d0b6c0a52f84044198","type":"message","status":"completed","content":[{"type":"output_text","text":"The ball costs **$0.05** and the bat costs **$1.05**.  \nThere are **15 primes below 50**."}],"phase":"final_answer","role":"assistant"},"output_index":1,"sequence_number":131}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_045288f15793708d016ad077c96fb887d0abd081efe90ce04b","status":"completed","model":"gpt-5.4-mini-2026-03-17","incomplete_details":null,"error":null,"usage":{"input_tokens":40,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":126,"output_tokens_details":{"reasoning_tokens":89},"total_tokens":166}},"sequence_number":132}
+

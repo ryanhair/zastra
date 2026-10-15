@@ -97,7 +97,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
                 errors.fail("{s}: model \"{s}\" supports neither structured output nor tool use, so `.output` can't be enforced", .{ who, spec.fullName() });
         }
         const native_output = has_output and spec.supports.structured_output and
-            !(spec.api == .openai_compat and json_schema.containsJson(Output_));
+            !(spec.api != .anthropic and json_schema.containsJson(Output_));
 
         // ── memory ───────────────────────────────────────────────────────
         var history_limit: u32 = 0;
@@ -300,6 +300,8 @@ fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime
         const name = spec.fullName();
         const modes = spec.supports.reasoning_modes;
         const anthropic = spec.api == .anthropic;
+        // OpenAI Responses: reasoning is an effort level, "none" turns it off.
+        const responses = spec.api == .openai_responses;
 
         const mode: ReasoningMode = if (!@hasField(C, "reasoning")) .default else blk: {
             const R = @TypeOf(cfg.reasoning);
@@ -322,26 +324,30 @@ fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime
             if (@hasField(C, "provider_options") and std.mem.indexOf(u8, cfg.provider_options, "\"thinking\"") != null)
                 errors.fail("{s}: set reasoning with `.reasoning` or with `\"thinking\"` in `.provider_options`, not both", .{who});
         }
-        if (show and !modes.visible) errors.fail("{s}: model \"{s}\" doesn't return readable reasoning{s}; remove `.show_reasoning`", .{
-            who, name, if (spec.api == .openai_compat and spec.supports.reasoning) " through Chat Completions (summaries arrive with the Responses API, PLAN.md §17.2)" else "",
+        if (show and !modes.visible) errors.fail("{s}: model \"{s}\" doesn't return readable reasoning; remove `.show_reasoning`{s}", .{
+            who, name, if (spec.api == .openai_compat) " (for a server that streams `reasoning_content`, set `.supports.reasoning_modes.visible = true`)" else "",
         });
 
         const request: ?provider.Reasoning = switch (mode) {
-            .default => if (!show) null else if (!modes.default_on)
+            .default => if (!show) null else if (!modes.default_on and !(responses and effort != null))
                 errors.fail("{s}: model \"{s}\" doesn't reason unless asked; add `.reasoning = .on` to use `.show_reasoning`", .{ who, name })
-            else if (modes.display_param) .{ .adaptive = .{ .summarized = true } } else null,
-            .on => if (!anthropic)
+            else if (modes.display_param) .{ .on = .{ .summarized = true } } else null,
+            .on => if (responses)
+                .{ .on = .{ .summarized = show and modes.display_param } }
+            else if (!anthropic)
                 (if (modes.default_on) null else errors.fail("{s}: zastra can't turn reasoning on for model \"{s}\"; it reasons by default or not at all", .{ who, name }))
-            else if (modes.adaptive) .{ .adaptive = .{ .summarized = show and modes.display_param } }
+            else if (modes.adaptive) .{ .on = .{ .summarized = show and modes.display_param } }
             else if (modes.budget)
                 errors.fail("{s}: model \"{s}\" needs a reasoning budget; use `.reasoning = .{{ .budget = 4_000 }}` (tokens, less than `.max_tokens`)", .{ who, name })
             else errors.fail("{s}: zastra can't turn reasoning on for model \"{s}\"", .{ who, name }),
             .off => blk: {
                 if (show) errors.fail("{s}: `.show_reasoning = true` with `.reasoning = .off`; remove one of them", .{who});
-                if (!anthropic or !modes.disable)
+                if (!(anthropic or responses) or !modes.disable)
                     errors.fail("{s}: model \"{s}\" can't turn reasoning off; remove `.reasoning = .off` (use `.effort = .low` to make it cheaper and faster)", .{ who, name });
                 if (modes.disable_only_up_to_high) if (effort) |e| if (e == .xhigh or e == .max)
                     errors.fail("{s}: model \"{s}\" can only turn reasoning off at effort `high` or below; got `.effort = .{s}`", .{ who, name, @tagName(e) });
+                if (responses and effort != null)
+                    errors.fail("{s}: `.reasoning = .off` sets OpenAI's reasoning effort to \"none\"; remove `.effort`", .{who});
                 break :blk .disabled;
             },
             .budget => |n| blk: {

@@ -1,0 +1,57 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_06020652d243d9ff016ad077af40f887d0b9cb7486d0f84a73","status":"in_progress","model":"gpt-5.4-mini-2026-03-17","incomplete_details":null,"error":null,"usage":null},"sequence_number":0}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_06020652d243d9ff016ad077af40f887d0b9cb7486d0f84a73","status":"in_progress","model":"gpt-5.4-mini-2026-03-17","incomplete_details":null,"error":null,"usage":null},"sequence_number":1}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"rs_06020652d243d9ff016ad077b04a0087d082f392d94ac917e2","type":"reasoning","content":[],"encrypted_content":"gAAAAABq0HewuvCJqu33YDlQ","summary":[]},"output_index":0,"sequence_number":2}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"rs_06020652d243d9ff016ad077b04a0087d082f392d94ac917e2","type":"reasoning","content":[],"encrypted_content":"gAAAAABq0HewDWtJj4iaznJr","summary":[]},"output_index":0,"sequence_number":3}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","type":"function_call","status":"in_progress","arguments":"","call_id":"call_1gp20pGYL3IxVDCEtSRdRrDT","name":"multiply"},"output_index":1,"sequence_number":4}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"{\"","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":5}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"a","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":6}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"\":","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":7}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"482","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":8}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"71","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":9}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":",\"","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":10}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"b","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":11}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"\":","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":12}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"991","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":13}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"73","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":14}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"}","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":15}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","arguments":"{\"a\":48271,\"b\":99173}","item_id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","output_index":1,"sequence_number":16}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"fc_06020652d243d9ff016ad077b0a42487d0bcb433dc178fbdc5","type":"function_call","status":"completed","arguments":"{\"a\":48271,\"b\":99173}","call_id":"call_1gp20pGYL3IxVDCEtSRdRrDT","name":"multiply"},"output_index":1,"sequence_number":17}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_06020652d243d9ff016ad077af40f887d0b9cb7486d0f84a73","status":"completed","model":"gpt-5.4-mini-2026-03-17","incomplete_details":null,"error":null,"usage":{"input_tokens":71,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":33,"output_tokens_details":{"reasoning_tokens":8},"total_tokens":104}},"sequence_number":18}
+

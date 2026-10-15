@@ -22,6 +22,7 @@ pub const FinishReason = msg.FinishReason;
 pub fn Impl(comptime api: catalog.Api) type {
     return switch (api) {
         .anthropic => @import("anthropic.zig"),
+        .openai_responses => @import("openai_responses.zig"),
         .openai_compat => @import("openai_compat.zig"),
     };
 }
@@ -47,10 +48,13 @@ pub const Effort = enum { low, medium, high, xhigh, max };
 /// Reasoning settings resolved at comptime from an agent's `.reasoning` and
 /// `.show_reasoning` against the model's capabilities (PLAN.md D37).
 pub const Reasoning = union(enum) {
-    /// Anthropic `{type:"adaptive"}`; `summarized` adds `display: "summarized"`.
-    adaptive: struct { summarized: bool = false },
+    /// Reason, and stream readable reasoning if `summarized`. Anthropic
+    /// `{type:"adaptive"}` (plus `display: "summarized"`); OpenAI an effort,
+    /// `.effort` or "medium" (plus `summary: "auto"`).
+    on: struct { summarized: bool = false },
     /// Anthropic `{type:"enabled", budget_tokens: N}`.
     budget: u32,
+    /// Anthropic `{type:"disabled"}`; OpenAI effort "none".
     disabled,
 };
 
@@ -76,7 +80,7 @@ pub const PrefixParts = struct {
 pub const Prefix = struct {
     json: []const u8,
     /// The prefix ends inside an open array (Anthropic `system` blocks,
-    /// OpenAI `messages`) holding this many items.
+    /// OpenAI `messages` or `input`) holding this many items.
     open_items: u32,
     hash: u64,
     /// Byte offset just before the tools array's closing `]`, when the

@@ -1,0 +1,21 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_r1","status":"in_progress"},"sequence_number":0}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"msg_r1","type":"message","status":"in_progress","content":[],"role":"assistant"},"output_index":0,"sequence_number":1}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","item_id":"msg_r1","output_index":0,"content_index":0,"part":{"type":"refusal","refusal":""},"sequence_number":2}
+
+event: response.refusal.delta
+data: {"type":"response.refusal.delta","item_id":"msg_r1","output_index":0,"content_index":0,"delta":"I can't help with that.","sequence_number":3}
+
+event: response.refusal.done
+data: {"type":"response.refusal.done","item_id":"msg_r1","output_index":0,"content_index":0,"refusal":"I can't help with that.","sequence_number":4}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"msg_r1","type":"message","status":"completed","content":[{"type":"refusal","refusal":"I can't help with that."}],"role":"assistant"},"output_index":0,"sequence_number":5}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_r1","status":"completed","usage":{"input_tokens":20,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":6}
+

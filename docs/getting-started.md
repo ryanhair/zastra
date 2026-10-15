@@ -78,7 +78,7 @@ pub const App = z.App(.{
 });
 ```
 
-`.name` is required: zastra can't see the name of the declaration that holds a type returned by a function. Model strings are checked against the catalog at compile time. For a model the catalog doesn't know, use `z.custom(.{ .provider = .openai_compat, .id = "...", .base_url = "...", .api_key_env = "...", .supports = .{ ... } })`.
+`.name` is required: zastra can't see the name of the declaration that holds a type returned by a function. Model strings are checked against the catalog at compile time. For a model the catalog doesn't know, use `z.custom(.{ .provider = .openai_compat, .id = "...", .base_url = "...", .api_key_env = "...", .supports = .{ ... } })`. `.provider` is `.anthropic`, `.openai_responses` (OpenAI's Responses API) or `.openai_compat` (Chat Completions servers).
 
 ## 4. Run it
 
@@ -147,6 +147,8 @@ pub const Planner = z.Agent(Ctx, .{
 ```
 
 `.reasoning = .off` on a model that can't stop thinking, `.on` on one that needs a budget, or `.show_reasoning` where nothing readable comes back are all compile errors that name the fix. `zig build dev -- models` lists what each model your App uses supports. You pay for reasoning tokens whether or not they're shown.
+
+On OpenAI models, reasoning is an effort level: `.reasoning = .on` uses your `.effort` (or `medium`), `.off` sends effort `none` on models that accept it, and `.show_reasoning` streams the summaries OpenAI writes of its reasoning. Some models (gpt-5.1 to gpt-5.4) don't reason unless asked; `.effort` or `.reasoning = .on` turns it on. Within a run, reasoning is passed back between tool steps so the model doesn't lose its train of thought.
 
 ## 6. Workflows
 

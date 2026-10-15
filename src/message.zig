@@ -30,7 +30,8 @@ pub const ToolResult = struct {
 
 pub const Reasoning = struct {
     text: []const u8,
-    /// Anthropic thinking signature; must round-trip unchanged.
+    /// Anthropic thinking signature or OpenAI encrypted reasoning; must
+    /// round-trip unchanged.
     signature: ?[]const u8 = null,
 };
 

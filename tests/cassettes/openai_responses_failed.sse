@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_f1","status":"in_progress"},"sequence_number":0}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"msg_f1","type":"message","status":"in_progress","content":[],"role":"assistant"},"output_index":0,"sequence_number":1}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_f1","output_index":0,"content_index":0,"delta":"Partial","sequence_number":2}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_f1","status":"failed","error":{"code":"server_error","message":"The server had an error while processing your request."},"usage":null},"sequence_number":3}
+

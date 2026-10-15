@@ -2,7 +2,7 @@
  "generated": "2026-10-14",
  "sources": {
   "anthropic": "claude-api skill model table (cached 2026-10-06) and shared/models.md; cache write = 1.25x input (5-minute TTL); structured_output flags checked against GET /v1/models capabilities, 2026-10-14; reasoning_modes from GET /v1/models thinking types plus the claude-api migration notes (defaults, display, effort limits), 2026-10-14",
-  "openai": "https://developers.openai.com/api/docs/pricing (Standard tier, short context), fetched 2026-10-14; model IDs from GET /v1/models. Context windows for gpt-5.4 and newer are not published on the pricing page and are assumed to match gpt-5 (400K/128K)."
+  "openai": "https://developers.openai.com/api/docs/pricing (Standard tier, short context), fetched 2026-10-14; model IDs from GET /v1/models. Context windows for gpt-5.4 and newer are not published on the pricing page and are assumed to match gpt-5 (400K/128K). reasoning_modes probed live against the Responses API, 2026-10-15: the default effort (default_on), whether effort \"none\" (disable) and \"xhigh\" (xhigh_effort) are accepted, and summaries with encrypted reasoning (visible, display_param)."
  },
  "providers": {
   "anthropic": {
@@ -12,7 +12,7 @@
    "base_url_env": "ANTHROPIC_BASE_URL"
   },
   "openai": {
-   "api": "openai_compat",
+   "api": "openai_responses",
    "base_url": "https://api.openai.com/v1",
    "api_key_env": "OPENAI_API_KEY",
    "base_url_env": "OPENAI_BASE_URL"
@@ -40,7 +40,8 @@
      "disable_only_up_to_high": false,
      "default_on": true,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -71,7 +72,8 @@
      "disable_only_up_to_high": false,
      "default_on": true,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -102,7 +104,8 @@
      "disable_only_up_to_high": false,
      "default_on": true,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -133,7 +136,8 @@
      "disable_only_up_to_high": true,
      "default_on": true,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -164,7 +168,8 @@
      "disable_only_up_to_high": false,
      "default_on": false,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -195,7 +200,8 @@
      "disable_only_up_to_high": false,
      "default_on": false,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -226,7 +232,8 @@
      "disable_only_up_to_high": false,
      "default_on": false,
      "visible": true,
-     "display_param": false
+     "display_param": false,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -257,7 +264,8 @@
      "disable_only_up_to_high": false,
      "default_on": true,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -288,7 +296,8 @@
      "disable_only_up_to_high": true,
      "default_on": true,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -319,7 +328,8 @@
      "disable_only_up_to_high": false,
      "default_on": false,
      "visible": true,
-     "display_param": false
+     "display_param": false,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -350,7 +360,8 @@
      "disable_only_up_to_high": true,
      "default_on": true,
      "visible": true,
-     "display_param": true
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -381,7 +392,8 @@
      "disable_only_up_to_high": false,
      "default_on": false,
      "visible": true,
-     "display_param": false
+     "display_param": false,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -411,8 +423,9 @@
      "disable": false,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -442,8 +455,9 @@
      "disable": false,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -470,11 +484,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -501,11 +516,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -532,11 +548,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -563,11 +580,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -594,11 +612,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -625,11 +644,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -656,11 +676,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
-     "default_on": true,
-     "visible": false,
-     "display_param": false
+     "default_on": false,
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -687,11 +708,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
-     "default_on": true,
-     "visible": false,
-     "display_param": false
+     "default_on": false,
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -718,11 +740,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
-     "default_on": true,
-     "visible": false,
-     "display_param": false
+     "default_on": false,
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -749,11 +772,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
-     "default_on": true,
-     "visible": false,
-     "display_param": false
+     "default_on": false,
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": true
     }
    },
    "pricing": {
@@ -780,11 +804,12 @@
     "reasoning_modes": {
      "adaptive": false,
      "budget": false,
-     "disable": false,
+     "disable": true,
      "disable_only_up_to_high": false,
-     "default_on": true,
-     "visible": false,
-     "display_param": false
+     "default_on": false,
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -814,8 +839,9 @@
      "disable": false,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -845,8 +871,9 @@
      "disable": false,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -876,8 +903,9 @@
      "disable": false,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -1017,8 +1045,9 @@
      "disable": false,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {
@@ -1048,8 +1077,9 @@
      "disable": false,
      "disable_only_up_to_high": false,
      "default_on": true,
-     "visible": false,
-     "display_param": false
+     "visible": true,
+     "display_param": true,
+     "xhigh_effort": false
     }
    },
    "pricing": {

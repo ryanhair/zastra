@@ -160,7 +160,7 @@ pub const Support = z.Agent(Ctx, .{
 /// one, and falls back to a forced tool call when it doesn't.
 pub const TriageAgent = z.Agent(Ctx, .{
     .name = "triage",
-    .model = "openai/gpt-5-mini",
+    .model = "openai/gpt-5-mini", // catalog OpenAI models use the Responses API
     .instructions = "Classify the support ticket. Be conservative with urgency.",
     .output = Triage,
 });

@@ -80,7 +80,17 @@ const Thinker = z.Agent(Ctx, .{ .name = "thinker", .model = "anthropic/claude-so
 const QuietThinker = z.Agent(Ctx, .{ .name = "quiet_thinker", .model = "anthropic/claude-sonnet-4-6", .reasoning = .on, .tools = .{LookupOrder} });
 const Budgeted = z.Agent(Ctx, .{ .name = "budgeted", .model = "anthropic/claude-sonnet-4-6", .reasoning = .{ .budget = 4_000 } });
 
-const App = z.App(.{ .ctx = Ctx, .agents = .{ Support, TriageAgent, TriageFallback, Thinker, QuietThinker, Budgeted } });
+/// OpenAI Responses: reasoning summaries shown, encrypted reasoning round-trips (D35, D36).
+const OaiThinker = z.Agent(Ctx, .{
+    .name = "oai_thinker",
+    .model = "openai/gpt-5.4-mini",
+    .reasoning = .on,
+    .show_reasoning = true,
+    .tools = .{LookupOrder},
+    .memory = .{ .history = .{ .last_messages = 20 } },
+});
+
+const App = z.App(.{ .ctx = Ctx, .agents = .{ Support, TriageAgent, TriageFallback, Thinker, QuietThinker, Budgeted, OaiThinker } });
 
 test "tool loop: call, result, answer" {
     var db: Db = .{};
@@ -230,8 +240,8 @@ test "structured output: native, with one repair attempt" {
     const r = try h.agent(TriageAgent).generate("My order arrived smashed", .{});
     try t.expectEqual(.refund, r.output.category);
     try t.expectEqual(@as(u8, 4), r.output.urgency);
-    // The schema went out as response_format, and the example is in the system prompt.
-    try t.expect(std.mem.indexOf(u8, h.requests()[0], "\"response_format\":{\"type\":\"json_schema\"") != null);
+    // The schema went out as the Responses text format, and the example is in the instructions.
+    try t.expect(std.mem.indexOf(u8, h.requests()[0], "\"text\":{\"format\":{\"type\":\"json_schema\"") != null);
     try t.expect(std.mem.indexOf(u8, h.requests()[0], "Output: {\\\"category\\\":\\\"shipping\\\"") != null);
 
     // Invalid, then valid after the repair message.
@@ -452,4 +462,37 @@ test "reasoning: a per-run max_tokens must exceed the budget" {
     defer h.deinit();
     try t.expectError(error.BadRequest, h.agent(Budgeted).generate("Hi", .{ .max_tokens = 2_000 }));
     try t.expectEqualStrings("agent 'budgeted': max_tokens 2000 must be greater than the reasoning budget (4000); the budget counts toward it", h.rt.lastDiagnostic());
+}
+
+test "D36: OpenAI reasoning goes back within a run, not across runs" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.script(OaiThinker, &.{
+        .withReasoning("Need the order first.", .tool(LookupOrder, .{ .order_id = "ORD-1" })),
+        .text("ORD-1 is $90."),
+        .text("You're welcome."),
+    });
+    var stream = try h.agent(OaiThinker).stream("Where's ORD-1?", .{ .thread = "oai" });
+    var reasoning: std.ArrayList(u8) = .empty;
+    defer reasoning.deinit(t.allocator);
+    while (try stream.next()) |event| switch (event) {
+        .reasoning_delta => |d| try reasoning.appendSlice(t.allocator, d),
+        else => {},
+    };
+    stream.deinit();
+    try t.expectEqualStrings("Need the order first.", reasoning.items);
+    try t.expect(std.mem.indexOf(u8, h.requests()[0], "\"reasoning\":{\"effort\":\"medium\",\"summary\":\"auto\"}") != null);
+    // Step 2 of the run: the reasoning item, then the call and its output.
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "{\"type\":\"reasoning\",\"encrypted_content\":\"enc_scripted_") != null);
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "\"summary\":[{\"type\":\"summary_text\",\"text\":\"Need the order first.\"}]},{\"type\":\"function_call\",\"call_id\":") != null);
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "{\"type\":\"function_call_output\",\"call_id\":") != null);
+
+    _ = try h.agent(OaiThinker).generate("Thanks", .{ .thread = "oai" });
+    // The next run has the history, without the reasoning item.
+    const third = h.requests()[2];
+    try t.expect(std.mem.indexOf(u8, third, "ORD-1 is $90.") != null);
+    try t.expect(std.mem.indexOf(u8, third, "\"function_call_output\"") != null);
+    try t.expect(std.mem.indexOf(u8, third, "\"type\":\"reasoning\"") == null);
 }

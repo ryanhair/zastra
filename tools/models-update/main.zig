@@ -25,6 +25,7 @@ const ReasoningModes = struct {
     default_on: bool = false,
     visible: bool = false,
     display_param: bool = false,
+    xhigh_effort: bool = false,
 };
 
 const Supports = struct {
@@ -273,9 +274,9 @@ fn render(arena: Allocator, src: Sources) ![]const u8 {
             s.parallel_tools,  s.prompt_caching,    s.forced_tool_choice,      s.temperature,
         });
         if (s.reasoning_modes) |r| try w.print(
-            \\            .reasoning_modes = .{{ .adaptive = {}, .budget = {}, .disable = {}, .disable_only_up_to_high = {}, .default_on = {}, .visible = {}, .display_param = {} }},
+            \\            .reasoning_modes = .{{ .adaptive = {}, .budget = {}, .disable = {}, .disable_only_up_to_high = {}, .default_on = {}, .visible = {}, .display_param = {}, .xhigh_effort = {} }},
             \\
-        , .{ r.adaptive, r.budget, r.disable, r.disable_only_up_to_high, r.default_on, r.visible, r.display_param });
+        , .{ r.adaptive, r.budget, r.disable, r.disable_only_up_to_high, r.default_on, r.visible, r.display_param, r.xhigh_effort });
         try w.print(
             \\        }},
             \\        .pricing = .{{ .input = {d}, .output = {d}, .cache_read = {d}, .cache_write = {d} }},
