@@ -75,7 +75,8 @@ pub const Fake = struct {
     fn acceptLoop(f: *Fake) void {
         while (true) {
             const conn = f.server.accept(f.io) catch return;
-            f.group.async(f.io, handle, .{ f, conn });
+            // `concurrent`, not `async`: a listen stream holds its handler open.
+            f.group.concurrent(f.io, handle, .{ f, conn }) catch handle(f, conn);
         }
     }
 

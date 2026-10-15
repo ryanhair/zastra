@@ -163,6 +163,10 @@ fn fakeEnv(env: *std.process.Environ.Map, url: []const u8) !void {
 }
 
 test "MCP 2026-07-28 over HTTP: mirrored headers, Base64, x-mcp-header rules, SSE replies, listen stream" {
+    // Like a 2-3 core CI runner: `async` work past the limit runs inline.
+    const saved_limit = t.io_instance.async_limit;
+    t.io_instance.async_limit = .limited(1);
+    defer t.io_instance.async_limit = saved_limit;
     // This test expects zastra warnings (skipped tools, unanswerable input requests).
     t.log_level = .err;
     defer t.log_level = .warn;
@@ -213,6 +217,10 @@ test "MCP 2026-07-28 over HTTP: mirrored headers, Base64, x-mcp-header rules, SS
 }
 
 test "MCP over HTTP: a 2025-11-25 server gets initialize, its session id, and a DELETE" {
+    // Like a 2-3 core CI runner: `async` work past the limit runs inline.
+    const saved_limit = t.io_instance.async_limit;
+    t.io_instance.async_limit = .limited(1);
+    defer t.io_instance.async_limit = saved_limit;
     const fake = try FakeHttp.start(t.allocator, t.io, .legacy);
     var env: std.process.Environ.Map = .init(t.allocator);
     defer env.deinit();

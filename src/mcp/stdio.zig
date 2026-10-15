@@ -13,6 +13,8 @@ const protocol = @import("protocol.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
+extern "kernel32" fn TerminateProcess(process: std.os.windows.HANDLE, exit_code: u32) callconv(.winapi) std.os.windows.BOOL;
+
 pub const Stdio = struct {
     gpa: Allocator,
     io: Io,
@@ -252,7 +254,7 @@ pub const Stdio = struct {
             c.io.sleep(.fromMilliseconds(10), .awake) catch break;
         if (!c.closed.load(.acquire)) if (c.child.id) |id| {
             if (builtin.os.tag == .windows) {
-                _ = std.os.windows.kernel32.TerminateProcess(id, 1);
+                _ = TerminateProcess(id, 1);
             } else std.posix.kill(id, .KILL) catch {};
         };
         if (c.reader) |*f| f.await(c.io);

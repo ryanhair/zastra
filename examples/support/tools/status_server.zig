@@ -29,7 +29,9 @@ pub fn main(init: std.process.Init) !void {
     defer group.cancel(io);
     while (true) {
         const conn = server.accept(io) catch return;
-        group.async(io, serve, .{ io, init.gpa, conn });
+        // `concurrent`, not `async`: past the CPU count `async` runs inline,
+        // and a kept-alive connection would block the accept loop.
+        group.concurrent(io, serve, .{ io, init.gpa, conn }) catch serve(io, init.gpa, conn);
     }
 }
 
