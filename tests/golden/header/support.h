@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZASTRA_ABI_VERSION 1u
+#define ZASTRA_ABI_VERSION 2u
 #define SUPPORT_MANIFEST_FINGERPRINT 0x337ba9d740ac4bdcull
 
 #ifndef ZASTRA_COMMON_TYPES
@@ -30,7 +30,6 @@ typedef enum zastra_status {
     ZASTRA_ERR_APPROVAL_PENDING = -2,
     ZASTRA_ERR_CANCELED = -3,
     ZASTRA_ERR_INVALID_INPUT = -4,
-    ZASTRA_ERR_APPROVAL_REQUIRED = -5,
     ZASTRA_ERR_ABI_MISMATCH = -6
 } zastra_status;
 
@@ -62,6 +61,10 @@ zastra_status zastra_stream_next(zastra_stream *s, zastra_event *out);
 zastra_status zastra_stream_respond(zastra_stream *s, const char *approval_id, const char *decision_json, zastra_error *err);
 /* Safe from any thread. */
 void zastra_stream_cancel(zastra_stream *s);
+/* While next() returns ZASTRA_ERR_APPROVAL_PENDING: save the run and stop.
+ * Returns {"status":"suspended","run_id":...,"requests":[...]}; resume it later
+ * with <lib>_agent_resume or <lib>_agent_resume_stream (caller frees). */
+zastra_result *zastra_stream_suspend(zastra_stream *s, zastra_error *err);
 /* After ZASTRA_DONE: the collected result (caller frees). */
 zastra_result *zastra_stream_result(zastra_stream *s, zastra_error *err);
 /* Why the last zastra_stream_next() returned an error ("" if it didn't). */
@@ -94,8 +97,15 @@ zastra_app *support_app_new_checked(const char *config_json, uint64_t manifest_f
 void support_app_free(zastra_app *app);
 
 /* input: plain text, or a JSON array of messages. opts_json: {"thread","resource","max_steps"} or NULL. */
+/* Results: {"status":"completed","text","output","steps","finish_reason","run_id","usage"}, or for agents with
+ * approval-gated tools {"status":"suspended","run_id","requests":[{"id","tool","input"}]} (the run is saved). */
 zastra_result *support_agent_generate(zastra_app *app, int agent_id, const char *input, const char *opts_json, zastra_error *err);
 zastra_stream *support_agent_stream(zastra_app *app, int agent_id, const char *input, const char *opts_json, zastra_error *err);
+/* decisions_json: [{"id":"...","approve":true}, {"id":"...","deny":"reason"}]. Undecided requests keep the run suspended. */
+zastra_result *support_agent_resume(zastra_app *app, int agent_id, const char *run_id, const char *decisions_json, zastra_error *err);
+zastra_stream *support_agent_resume_stream(zastra_app *app, int agent_id, const char *run_id, const char *decisions_json, zastra_error *err);
+/* Abandon a suspended run. */
+zastra_status support_agent_cancel(zastra_app *app, int agent_id, const char *run_id, zastra_error *err);
 
 /* Results: {"status":"completed","output":...} | {"status":"suspended","run_id","at","payload"} | {"status":"failed","step","error","message"} */
 zastra_result *support_workflow_start(zastra_app *app, int workflow_id, const char *input_json, zastra_error *err);

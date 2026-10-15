@@ -240,6 +240,12 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
         const Event_ = make.TaggedUnion(ev_names, ev_types);
 
         const tools_tuple = user_tools;
+        var prints: [defs.len]@import("run.zig").ToolPrint = undefined;
+        for (defs, 0..) |d, i| prints[i] = .{
+            .name = d.name,
+            .hash = std.fmt.comptimePrint("{x:0>16}", .{std.hash.Wyhash.hash(0, d.description ++ "\x00" ++ d.schema)}),
+        };
+        const tool_prints_ = prints;
         const has_approvals_ = appr_names.len > 0;
         const history_limit_final = history_limit;
         const Working_final = Working_;
@@ -273,6 +279,12 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             pub const max_tokens_default = max_tokens;
             pub const prefix = prefix_;
             pub const prefix_hash = prefix_.hash;
+            /// Identifies the agent version a saved run belongs to (PLAN.md
+            /// §17.3): the request prefix, which holds the instructions,
+            /// model, settings and every tool definition.
+            pub const run_fingerprint: u64 = prefix_.hash;
+            /// Per-tool hashes, so a fingerprint mismatch names the tool.
+            pub const tool_prints = tool_prints_;
             pub const tool_defs = defs_final;
             pub const ToolCall = ToolCall_;
             pub const ApprovalCall = ApprovalCall_;

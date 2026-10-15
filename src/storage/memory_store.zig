@@ -104,7 +104,8 @@ pub const MemoryStore = struct {
     fn dupeRun(gpa: Allocator, r: storage.RunRecord) !storage.RunRecord {
         return .{
             .run_id = try gpa.dupe(u8, r.run_id),
-            .workflow_id = try gpa.dupe(u8, r.workflow_id),
+            .kind = r.kind,
+            .owner_id = try gpa.dupe(u8, r.owner_id),
             .fingerprint = r.fingerprint,
             .status = try gpa.dupe(u8, r.status),
             .suspended_at = if (r.suspended_at) |s| try gpa.dupe(u8, s) else null,
@@ -116,7 +117,7 @@ pub const MemoryStore = struct {
 
     fn freeRun(gpa: Allocator, r: storage.RunRecord) void {
         gpa.free(r.run_id);
-        gpa.free(r.workflow_id);
+        gpa.free(r.owner_id);
         gpa.free(r.status);
         if (r.suspended_at) |s| gpa.free(s);
         gpa.free(r.state_json);
@@ -150,12 +151,25 @@ pub const MemoryStore = struct {
         defer m.mutex.unlock(m.io);
         var out: std.ArrayList(storage.RunRecord) = .empty;
         for (m.runs.values()) |r| {
-            if (filter.workflow_id) |w| if (!std.mem.eql(u8, w, r.workflow_id)) continue;
+            if (filter.kind) |k| if (k != r.kind) continue;
+            if (filter.owner_id) |w| if (!std.mem.eql(u8, w, r.owner_id)) continue;
             if (filter.status) |st| if (!std.mem.eql(u8, st, r.status)) continue;
             if (out.items.len >= filter.limit) break;
             try out.append(arena, try dupeRun(arena, r));
         }
         return out.items;
+    }
+
+    pub fn claimRun(m: *MemoryStore, run_id: []const u8, from: []const u8, to: []const u8, now: i64) !bool {
+        m.mutex.lockUncancelable(m.io);
+        defer m.mutex.unlock(m.io);
+        const r = m.runs.getPtr(run_id) orelse return false;
+        if (!std.mem.eql(u8, r.status, from)) return false;
+        const status = try m.gpa.dupe(u8, to);
+        m.gpa.free(r.status);
+        r.status = status;
+        r.updated_at = now;
+        return true;
     }
 };
 

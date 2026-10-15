@@ -16,16 +16,31 @@ const trace = @import("../trace/trace.zig");
 const ToolCtx = @import("../context.zig").ToolCtx;
 const agent_mod = @import("agent.zig");
 const ev = @import("events.zig");
+const storage = @import("../storage/storage.zig");
 const Allocator = std.mem.Allocator;
 const Message = msg.Message;
 
 pub const Error = provider.Error || error{
-    /// A tool needs a decision; call `respond` for each pending approval.
+    /// A tool needs a decision; call `respond` for each pending approval,
+    /// or `suspendRun` to save the run and decide later.
     ApprovalPending,
-    /// `generate` hit an approval-gated call without `on_approval`.
-    ApprovalRequired,
-    /// `respond` with an id that isn't pending.
+    /// `respond` or `resumeRun` with an id that isn't pending. The
+    /// diagnostic lists the pending ids.
     UnknownApproval,
+    /// `resumeRun`/`cancelRun`: no saved run with that id.
+    RunNotFound,
+    /// The saved run belongs to another agent or to a workflow.
+    WrongAgent,
+    /// The saved run isn't suspended (it finished, failed or was canceled).
+    NotSuspended,
+    /// Another resume claimed the run first (PLAN.md D32).
+    RunBusy,
+    /// The run was saved by a different version of the agent (prompt,
+    /// model or tools changed). The diagnostic names what changed; deny
+    /// and restart instead (PLAN.md §17.3).
+    SnapshotIncompatible,
+    /// The saved run didn't parse.
+    CorruptSnapshot,
     /// Structured output failed validation after the repair attempt.
     OutputInvalid,
     /// The provider's API key isn't in the environment.
@@ -49,8 +64,7 @@ pub fn Options(comptime A: type) type {
         max_tokens: ?u32 = null,
         /// Include the run's messages in the result.
         include_messages: bool = false,
-        /// For `generate`: decide approvals inline instead of returning
-        /// `error.ApprovalRequired`.
+        /// For `generate`: decide approvals inline instead of suspending.
         on_approval: ?struct {
             ctx: ?*anyopaque = null,
             decide: *const fn (ctx: ?*anyopaque, call: A.ApprovalCall) ev.Decision,
@@ -80,6 +94,67 @@ pub fn GenerateResult(comptime A: type) type {
         run_id: []const u8,
     };
 }
+
+/// A run paused for approval and saved to storage (PLAN.md §17.3, D31).
+/// Decide with `resumeRun(run_id, decisions)`, in this process or another
+/// one with the same storage.
+pub fn Suspended(comptime A: type) type {
+    return struct {
+        run_id: []const u8,
+        /// The calls waiting for a decision, typed per tool.
+        requests: []const ev.ApprovalRequest(A.ApprovalCall),
+    };
+}
+
+/// What `generate` and `resumeRun` return for an agent with
+/// approval-gated tools.
+pub fn RunResult(comptime A: type) type {
+    return union(enum) {
+        completed: GenerateResult(A),
+        suspended: Suspended(A),
+    };
+}
+
+/// `generate`'s result: `RunResult(A)` for agents with approval-gated
+/// tools, the plain `GenerateResult(A)` for the rest (D22).
+pub fn Result(comptime A: type) type {
+    return if (A.has_approvals) RunResult(A) else GenerateResult(A);
+}
+
+/// What a saved agent run holds (PLAN.md §17.3). History is appended once,
+/// when the run finishes, so `messages` includes loaded history and
+/// `new_from` marks where this run's messages start.
+const Snapshot = struct {
+    version: u32 = 1,
+    prefix_hash: []const u8,
+    tools: []const ToolPrint,
+    messages: []const Message,
+    new_from: usize,
+    calls: []const SavedCall,
+    step: u32,
+    max_steps: u32,
+    max_tokens: ?u32,
+    usage: msg.Usage,
+    step_usage: msg.Usage,
+    repair_used: bool,
+    working_json: ?[]const u8,
+    working_dirty: bool,
+    thread: ?[]const u8,
+    resource: ?[]const u8,
+    trace_id: []const u8,
+    created_at: i64,
+};
+
+const SavedCall = struct {
+    id: []const u8,
+    /// "none", "pending", "approved" or "denied".
+    approval: []const u8,
+    deny_reason: []const u8 = "",
+};
+
+/// A tool's name and the hash of its definition, so a fingerprint mismatch
+/// can say which tool changed.
+pub const ToolPrint = struct { name: []const u8, hash: []const u8 };
 
 /// What `stream`/`generate` accept as input: a prompt string or messages.
 pub fn toMessages(arena: Allocator, input: anytype) Allocator.Error![]const Message {
@@ -170,6 +245,10 @@ pub fn Stream(comptime A: type) type {
         canceled: bool = false,
         step_usage: msg.Usage = .{},
         input: []const Message,
+        /// The run has a row in storage (it was suspended at some point), so
+        /// its final status is written there too.
+        persisted: bool = false,
+        created_at: i64 = 0,
 
         const tag_headers = [_][2][]const u8{.{ "x-zastra-agent", A.id }};
 
@@ -183,6 +262,7 @@ pub fn Stream(comptime A: type) type {
                 .trace_id = opts.trace_id orelse st.tracer.newId(),
                 .max_steps = opts.max_steps orelse A.max_steps_default,
                 .input = input,
+                .created_at = st.nowMs(),
             };
             s.run_span = st.tracer.begin(.agent_run, A.id, s.trace_id, opts.trace_parent);
             s.run_span.attr("agent", A.id);
@@ -216,7 +296,161 @@ pub fn Stream(comptime A: type) type {
                 s.pending -= 1;
                 return;
             }
+            s.diag.print(0, "agent '{s}' run '{s}': no pending approval '{s}'; pending: {f}", .{ A.id, s.run_id, approval_id, PendingIds{ .calls = s.calls.items } });
+            s.st.setDiag(&s.diag);
             return error.UnknownApproval;
+        }
+
+        const PendingIds = struct {
+            calls: []const Call,
+            pub fn format(p: PendingIds, w: *std.Io.Writer) std.Io.Writer.Error!void {
+                var n: usize = 0;
+                for (p.calls) |c| if (c.approval == .pending) {
+                    try w.print("{s}{s}", .{ if (n > 0) ", " else "", c.id });
+                    n += 1;
+                };
+                if (n == 0) try w.writeAll("none");
+            }
+        };
+
+        /// Save the run while approvals are pending and stop streaming. The
+        /// returned run id resumes it later with `resumeRun`/`resumeStream`,
+        /// in this process or another one with the same storage. Decisions
+        /// already made with `respond` are kept. (`suspend` is a Zig keyword.)
+        pub fn suspendRun(s: *Self) Error!Suspended(A) {
+            if (comptime !A.has_approvals) unreachable;
+            if (s.phase != .awaiting_approval or s.pending == 0) {
+                s.diag.print(0, "agent '{s}' run '{s}': suspendRun() needs a pending approval", .{ A.id, s.run_id });
+                s.st.setDiag(&s.diag);
+                return error.NotSuspended;
+            }
+            const store = s.st.storage orelse return error.StorageFailed;
+            const snap = try s.snapshot();
+            store.saveRun(.{
+                .run_id = s.run_id,
+                .kind = .agent,
+                .owner_id = A.id,
+                .fingerprint = A.run_fingerprint,
+                .status = "suspended",
+                .suspended_at = "approval",
+                .state_json = try json.stringifyAlloc(s.arena, snap),
+                .created_at = s.created_at,
+                .updated_at = s.st.nowMs(),
+            }) catch |err| {
+                s.diag.print(0, "agent '{s}' run '{s}': saving the suspended run: {t}", .{ A.id, s.run_id, err });
+                s.st.setDiag(&s.diag);
+                return error.StorageFailed;
+            };
+            s.persisted = true;
+            var reqs: std.ArrayList(ev.ApprovalRequest(A.ApprovalCall)) = .empty;
+            for (s.calls.items) |c| if (c.approval == .pending) {
+                if (s.approvalCall(c)) |call| try reqs.append(s.arena, .{ .id = c.id, .call = call });
+            };
+            if (s.step_open) {
+                s.step_span.attr("suspended", true);
+                s.step_span.end();
+                s.step_open = false;
+            }
+            s.run_span.attr("suspended", true);
+            s.run_span.attr("steps", s.step);
+            s.run_span.end();
+            s.phase = .done;
+            return .{ .run_id = s.run_id, .requests = reqs.items };
+        }
+
+        fn approvalCall(s: *Self, c: Call) ?A.ApprovalCall {
+            _ = s;
+            if (comptime !A.has_approvals) return null;
+            const pc = c.parsed orelse return null;
+            inline for (A.tools, 0..) |TI, i| if (comptime TI.approval_kind != .never) if (i == c.tool_index)
+                return @unionInit(A.ApprovalCall, TI.name, @field(pc, TI.name));
+            return null;
+        }
+
+        fn snapshot(s: *Self) Error!Snapshot {
+            const calls = try s.arena.alloc(SavedCall, s.calls.items.len);
+            for (s.calls.items, calls) |c, *o| o.* = .{ .id = c.id, .approval = @tagName(c.approval), .deny_reason = c.deny_reason };
+            return .{
+                .prefix_hash = try std.fmt.allocPrint(s.arena, "{x:0>16}", .{A.prefix_hash}),
+                .tools = &A.tool_prints,
+                .messages = s.messages.items,
+                .new_from = s.new_from,
+                .calls = calls,
+                .step = s.step,
+                .max_steps = s.max_steps,
+                .max_tokens = s.opts.max_tokens,
+                .usage = s.usage,
+                .step_usage = s.step_usage,
+                .repair_used = s.repair_used,
+                .working_json = if (A.has_working_memory) try json.stringifyAlloc(s.arena, s.working) else null,
+                .working_dirty = s.working_dirty,
+                .thread = s.opts.thread,
+                .resource = s.opts.resource,
+                .trace_id = try std.fmt.allocPrint(s.arena, "{x}", .{s.trace_id[0..]}),
+                .created_at = s.created_at,
+            };
+        }
+
+        /// Rebuild a stream from a saved run, waiting at its approvals.
+        fn restore(st: *runtime.State, arena: Allocator, run_id: []const u8, snap: Snapshot) Error!*Self {
+            var trace_id: [16]u8 = @splat(0);
+            _ = std.fmt.hexToBytes(&trace_id, snap.trace_id) catch {};
+            const s = try init(st, arena, &.{}, .{
+                .thread = snap.thread,
+                .resource = snap.resource,
+                .max_steps = snap.max_steps,
+                .max_tokens = snap.max_tokens,
+                .run_id = run_id,
+                .trace_id = trace_id,
+            });
+            errdefer s.deinit();
+            s.persisted = true;
+            s.created_at = snap.created_at;
+            s.run_span.attr("resumed", true);
+            try s.messages.appendSlice(arena, snap.messages);
+            s.new_from = snap.new_from;
+            s.step = snap.step;
+            s.usage = snap.usage;
+            s.step_usage = snap.step_usage;
+            s.repair_used = snap.repair_used;
+            s.working_dirty = snap.working_dirty;
+            if (A.has_working_memory) {
+                if (snap.working_json) |wj| {
+                    var issue: parse.Issue = .{};
+                    s.working = parse.parse(A.Working, arena, wj, &issue) catch return error.CorruptSnapshot;
+                }
+                s.system_suffix = try s.workingSuffix();
+            }
+            // The calls come from the assistant turn that asked for them.
+            const last = if (s.messages.items.len > 0) s.messages.items[s.messages.items.len - 1] else return error.CorruptSnapshot;
+            if (last.role != .assistant or last.content != .blocks) return error.CorruptSnapshot;
+            for (last.content.blocks) |b| if (b == .tool_use) try s.addCall(b.tool_use);
+            if (s.calls.items.len != snap.calls.len) return error.CorruptSnapshot;
+            for (s.calls.items, snap.calls) |*c, saved| {
+                if (!std.mem.eql(u8, c.id, saved.id)) return error.CorruptSnapshot;
+                c.approval = std.meta.stringToEnum(@TypeOf(c.approval), saved.approval) orelse return error.CorruptSnapshot;
+                c.deny_reason = saved.deny_reason;
+                if (c.approval == .pending) s.pending += 1;
+            }
+            s.step_span = st.tracer.begin(.agent_step, A.id, s.trace_id, &s.run_span);
+            s.step_span.attr("step", s.step);
+            s.step_span.attr("resumed", true);
+            s.step_open = true;
+            s.phase = .awaiting_approval;
+            return s;
+        }
+
+        fn workingSuffix(s: *Self) Allocator.Error![]const u8 {
+            return std.fmt.allocPrint(s.arena, "Working memory (what you know about this user; update it with `{s}`):\n{f}", .{ agent_mod.working_memory_tool, json.fmt(s.working) });
+        }
+
+        /// Queue `approval_request` events for the calls still pending (a
+        /// resumed stream shows them again, e.g. to a reconnecting UI).
+        fn requeuePending(s: *Self) Error!void {
+            if (comptime !A.has_approvals) return;
+            for (s.calls.items) |c| if (c.approval == .pending) {
+                if (s.approvalCall(c)) |call| try s.push(@unionInit(A.Event, "approval_request", .{ .id = c.id, .call = call }));
+            };
         }
 
         /// Stop the run. The next `next()` yields a `.finish` with reason
@@ -324,7 +558,25 @@ pub fn Stream(comptime A: type) type {
                 s.run_span.fail(s.diag.message());
                 s.run_span.end();
                 s.phase = .done;
+                s.saveStatus("failed");
             }
+        }
+
+        /// For runs that were saved while suspended: record how they ended.
+        fn saveStatus(s: *Self, status: []const u8) void {
+            if (!s.persisted) return;
+            const store = s.st.storage orelse return;
+            store.saveRun(.{
+                .run_id = s.run_id,
+                .kind = .agent,
+                .owner_id = A.id,
+                .fingerprint = A.run_fingerprint,
+                .status = status,
+                .suspended_at = null,
+                .state_json = "{}",
+                .created_at = s.created_at,
+                .updated_at = s.st.nowMs(),
+            }) catch |err| std.log.warn("zastra: agent '{s}' run '{s}': recording status '{s}': {t}", .{ A.id, s.run_id, status, err });
         }
 
         fn push(s: *Self, e: A.Event) Allocator.Error!void {
@@ -375,8 +627,7 @@ pub fn Stream(comptime A: type) type {
                         }
                     }
                 };
-                s.system_suffix = try std.fmt.allocPrint(s.arena,
-                    "Working memory (what you know about this user; update it with `{s}`):\n{f}", .{ agent_mod.working_memory_tool, json.fmt(s.working) });
+                s.system_suffix = try s.workingSuffix();
             }
             s.new_from = s.messages.items.len;
             try s.messages.appendSlice(s.arena, s.input);
@@ -749,6 +1000,7 @@ pub fn Stream(comptime A: type) type {
             s.run_span.end();
             try s.push(@unionInit(A.Event, "finish", ev.Finish{ .reason = reason, .steps = s.step, .usage = s.usage }));
             s.phase = .done;
+            s.saveStatus(if (reason == .canceled) "canceled" else "completed");
         }
 
         fn save(s: *Self) Error!void {
@@ -774,21 +1026,156 @@ pub fn Stream(comptime A: type) type {
     };
 }
 
-/// `generate`: run to completion and collect the result.
-pub fn generate(comptime A: type, st: *runtime.State, arena: Allocator, input: []const Message, opts: Options(A)) Error!GenerateResult(A) {
+/// `generate`: run to completion and collect the result. An agent with
+/// approval-gated tools returns `.suspended` (after saving the run) when a
+/// call needs a decision and there's no `on_approval`.
+pub fn generate(comptime A: type, st: *runtime.State, arena: Allocator, input: []const Message, opts: Options(A)) Error!Result(A) {
     const s = try Stream(A).init(st, arena, input, opts);
     defer s.deinit();
-    while (try s.next()) |e| {
+    return drive(A, s, opts);
+}
+
+fn drive(comptime A: type, s: *Stream(A), opts: Options(A)) Error!Result(A) {
+    while (true) {
+        const e = s.next() catch |err| {
+            if (comptime A.has_approvals) if (err == error.ApprovalPending) return .{ .suspended = try s.suspendRun() };
+            return err;
+        } orelse break;
         if (comptime A.has_approvals) switch (e) {
             inline else => |payload, tag| if (comptime std.mem.eql(u8, @tagName(tag), "approval_request")) {
-                const decide = opts.on_approval orelse {
-                    s.diag.print(0, "agent '{s}': tool call needs approval ({t}); use `stream` and `respond`, or pass `.on_approval` to generate", .{ A.id, std.meta.activeTag(payload.call) });
-                    st.setDiag(&s.diag);
-                    return error.ApprovalRequired;
-                };
-                try s.respond(payload.id, decide.decide(decide.ctx, payload.call));
+                if (opts.on_approval) |decide| try s.respond(payload.id, decide.decide(decide.ctx, payload.call));
             },
         };
     }
-    return s.result();
+    const r = try s.result();
+    return if (comptime A.has_approvals) .{ .completed = r } else r;
+}
+
+/// One decision for `resumeRun`/`resumeStream`.
+pub const ApprovalDecision = struct {
+    /// The request id from `Suspended.requests` or an `approval_request` event.
+    id: []const u8,
+    decision: ev.Decision,
+};
+
+/// Load a suspended run, check it, claim it and apply `decisions`.
+fn reopen(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []const u8, decisions: []const ApprovalDecision) Error!*Stream(A) {
+    const store = st.storage orelse return error.StorageFailed;
+    const rec = (store.loadRun(arena, run_id) catch |err| {
+        st.diagPrint("agent '{s}': loading run '{s}': {t}", .{ A.id, run_id, err });
+        return error.StorageFailed;
+    }) orelse {
+        st.diagPrint("agent '{s}': no saved run '{s}'", .{ A.id, run_id });
+        return error.RunNotFound;
+    };
+    if (rec.kind != .agent or !std.mem.eql(u8, rec.owner_id, A.id)) {
+        st.diagPrint("run '{s}' belongs to {t} '{s}', not agent '{s}'", .{ run_id, rec.kind, rec.owner_id, A.id });
+        return error.WrongAgent;
+    }
+    if (!std.mem.eql(u8, rec.status, "suspended")) {
+        st.diagPrint("agent '{s}' run '{s}' is {s}, not suspended", .{ A.id, run_id, rec.status });
+        return if (std.mem.eql(u8, rec.status, "running")) error.RunBusy else error.NotSuspended;
+    }
+    var issue: parse.Issue = .{};
+    const snap = parse.parse(Snapshot, arena, rec.state_json, &issue) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ValidationFailed => {
+            st.diagPrint("agent '{s}' run '{s}': saved run doesn't parse: {f}", .{ A.id, run_id, issue });
+            return error.CorruptSnapshot;
+        },
+    };
+    if (rec.fingerprint != A.run_fingerprint) {
+        st.diagPrint("agent '{s}' run '{s}' was saved by a different version of the agent: {f}. Deny its approvals and start a new run", .{ A.id, run_id, Changes(A){ .saved = snap.tools } });
+        return error.SnapshotIncompatible;
+    }
+    const s = Stream(A).restore(st, arena, try arena.dupe(u8, run_id), snap) catch |err| {
+        if (err == error.CorruptSnapshot) st.diagPrint("agent '{s}' run '{s}': saved run is inconsistent", .{ A.id, run_id });
+        return err;
+    };
+    errdefer s.deinit();
+    // Check every id before claiming, so a typo changes nothing.
+    for (decisions) |d| {
+        const known = for (s.calls.items) |c| {
+            if (c.approval == .pending and std.mem.eql(u8, c.id, d.id)) break true;
+        } else false;
+        if (!known) {
+            s.diag.print(0, "agent '{s}' run '{s}': no pending approval '{s}'; pending: {f}", .{ A.id, run_id, d.id, Stream(A).PendingIds{ .calls = s.calls.items } });
+            st.setDiag(&s.diag);
+            return error.UnknownApproval;
+        }
+    }
+    const claimed = store.claimRun(run_id, "suspended", "running", st.nowMs()) catch return error.StorageFailed;
+    if (!claimed) {
+        st.diagPrint("agent '{s}' run '{s}' is already being resumed", .{ A.id, run_id });
+        return error.RunBusy;
+    }
+    for (decisions) |d| try s.respond(d.id, d.decision);
+    return s;
+}
+
+/// What changed between a saved run's agent and the current one.
+fn Changes(comptime A: type) type {
+    return struct {
+        saved: []const ToolPrint,
+        pub fn format(c: @This(), w: *std.Io.Writer) std.Io.Writer.Error!void {
+            var n: usize = 0;
+            for (A.tool_prints) |now| {
+                const old = for (c.saved) |o| {
+                    if (std.mem.eql(u8, o.name, now.name)) break o;
+                } else null;
+                if (old == null) {
+                    try w.print("{s}tool '{s}' was added", .{ if (n > 0) "; " else "", now.name });
+                    n += 1;
+                } else if (!std.mem.eql(u8, old.?.hash, now.hash)) {
+                    try w.print("{s}tool '{s}' changed", .{ if (n > 0) "; " else "", now.name });
+                    n += 1;
+                }
+            }
+            for (c.saved) |o| {
+                const still = for (A.tool_prints) |now| {
+                    if (std.mem.eql(u8, o.name, now.name)) break true;
+                } else false;
+                if (!still) {
+                    try w.print("{s}tool '{s}' was removed", .{ if (n > 0) "; " else "", o.name });
+                    n += 1;
+                }
+            }
+            if (n == 0) try w.writeAll("its instructions, model or settings changed");
+        }
+    };
+}
+
+/// Resume a suspended run with decisions for some or all of its pending
+/// approvals (D33): with some still pending it's saved again and returned
+/// as `.suspended`; otherwise it runs on (and may suspend again).
+pub fn resumeRun(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []const u8, decisions: []const ApprovalDecision) Error!RunResult(A) {
+    const s = try reopen(A, st, arena, run_id, decisions);
+    defer s.deinit();
+    if (s.pending > 0) return .{ .suspended = try s.suspendRun() };
+    return drive(A, s, .{});
+}
+
+/// Like `resumeRun`, streaming. Approvals still pending are emitted again
+/// as `approval_request` events first.
+pub fn resumeStream(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []const u8, decisions: []const ApprovalDecision) Error!*Stream(A) {
+    const s = try reopen(A, st, arena, run_id, decisions);
+    try s.requeuePending();
+    return s;
+}
+
+/// Abandon a suspended run: it's marked `canceled` and can't be resumed.
+pub fn cancelRun(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []const u8) Error!void {
+    const store = st.storage orelse return error.StorageFailed;
+    const rec = (store.loadRun(arena, run_id) catch return error.StorageFailed) orelse {
+        st.diagPrint("agent '{s}': no saved run '{s}'", .{ A.id, run_id });
+        return error.RunNotFound;
+    };
+    if (rec.kind != .agent or !std.mem.eql(u8, rec.owner_id, A.id)) {
+        st.diagPrint("run '{s}' belongs to {t} '{s}', not agent '{s}'", .{ run_id, rec.kind, rec.owner_id, A.id });
+        return error.WrongAgent;
+    }
+    if (!(store.claimRun(run_id, "suspended", "canceled", st.nowMs()) catch return error.StorageFailed)) {
+        st.diagPrint("agent '{s}' run '{s}' is {s}, not suspended", .{ A.id, run_id, rec.status });
+        return if (std.mem.eql(u8, rec.status, "running")) error.RunBusy else error.NotSuspended;
+    }
 }

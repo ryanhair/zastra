@@ -101,7 +101,7 @@ test "tool loop: call, result, answer" {
         .tool(LookupOrder, .{ .order_id = "ORD-1" }),
         .text("Your order ORD-1 is $90."),
     });
-    const r = try h.agent(Support).generate("Where's ORD-1?", .{ .include_messages = true });
+    const r = (try h.agent(Support).generate("Where's ORD-1?", .{ .include_messages = true })).completed;
     try t.expectEqualStrings("Your order ORD-1 is $90.", r.text);
     try t.expectEqual(@as(u32, 2), r.steps);
     try t.expectEqual(@as(u32, 1), db.lookups.load(.monotonic));
@@ -120,7 +120,7 @@ test "ModelErrors go back to the model; the run continues" {
         .tool(LookupOrder, .{ .order_id = "nope" }),
         .text("I couldn't find that order."),
     });
-    const r = try h.agent(Support).generate("Where's nope?", .{ .include_messages = true });
+    const r = (try h.agent(Support).generate("Where's nope?", .{ .include_messages = true })).completed;
     const res = r.messages[2].content.blocks[0].tool_result;
     try t.expect(res.is_error);
     try t.expectEqualStrings("No order exists with that ID.", res.content);
@@ -176,14 +176,11 @@ test "streaming: exhaustive events, typed tool calls and approvals" {
     try t.expectEqualStrings("Refunded.", text.items);
 }
 
-test "denied approvals are reported to the model; generate needs on_approval" {
+test "denied approvals are reported to the model; on_approval decides inline" {
     var db: Db = .{};
     var ctx: Ctx = .{ .db = &db };
     var h = try z.testing.harness(App, .{ .ctx = &ctx });
     defer h.deinit();
-    h.script(Support, &.{.tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 90_00 })});
-    try t.expectError(error.ApprovalRequired, h.agent(Support).generate("Refund", .{}));
-    try t.expect(std.mem.indexOf(u8, h.rt.lastDiagnostic(), "needs approval") != null);
 
     h.script(Support, &.{
         .tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 90_00 }),
@@ -195,10 +192,10 @@ test "denied approvals are reported to the model; generate needs on_approval" {
             return .{ .deny = "Over limit" };
         }
     };
-    const r = try h.agent(Support).generate("Refund", .{ .on_approval = .{ .decide = Deny.decide } });
+    const r = (try h.agent(Support).generate("Refund", .{ .on_approval = .{ .decide = Deny.decide } })).completed;
     try t.expectEqualStrings("I can't refund that.", r.text);
     try t.expectEqual(@as(u32, 0), db.refunds.load(.monotonic));
-    try t.expect(std.mem.indexOf(u8, h.requests()[2], "The user denied this tool call: Over limit") != null);
+    try t.expect(std.mem.indexOf(u8, h.requests()[1], "The user denied this tool call: Over limit") != null);
 }
 
 test "small refunds skip approval" {
@@ -223,7 +220,7 @@ test "parallel tool calls in one turn" {
         .tools(&.{ .{ .lookup_order = .{ .order_id = "ORD-1" } }, .{ .lookup_order = .{ .order_id = "ORD-2" } }, .{ .lookup_order = .{ .order_id = "ORD-3" } } }),
         .text("Found all three."),
     });
-    const r = try h.agent(Support).generate("Look up three orders", .{ .include_messages = true });
+    const r = (try h.agent(Support).generate("Look up three orders", .{ .include_messages = true })).completed;
     try t.expectEqual(@as(u32, 3), db.lookups.load(.monotonic));
     // All results go back in one message, in call order.
     const results = r.messages[2].content.blocks;
@@ -386,7 +383,8 @@ test "D8: tools that spend money require approval by default" {
     var h = try z.testing.harness(App3, .{ .ctx = &ctx });
     defer h.deinit();
     h.script(Biller, &.{.tool(Charge, .{ .cents = 100 })});
-    try t.expectError(error.ApprovalRequired, h.agent(Biller).generate("charge", .{}));
+    const r = try h.agent(Biller).generate("charge", .{});
+    try t.expectEqual(@as(usize, 1), r.suspended.requests.len);
 }
 
 test "D30: thinking blocks from earlier runs aren't replayed" {

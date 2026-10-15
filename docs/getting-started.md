@@ -131,7 +131,24 @@ while (try s.next()) |event| switch (event) {
 };
 ```
 
-`generate` on an agent with approval-gated tools returns `error.ApprovalRequired`, unless you pass `.on_approval`.
+Approvals don't have to be decided while the stream is open. `generate` on an agent with approval-gated tools returns a union: `.completed`, or `.suspended` once the run is saved to storage with its pending calls. Decide later, in any process with the same storage:
+
+```zig
+const r = try rt.agent(Support).generate(arena, "Refund ORD-1042", .{ .thread = "t1" });
+switch (r) {
+    .completed => |c| print("{s}", .{c.text}),
+    .suspended => |s| for (s.requests) |req| switch (req.call) {
+        .issue_refund => |in| try queueForReview(s.run_id, req.id, in),
+    },
+}
+
+// Later:
+const r2 = try rt.agent(Support).resumeRun(arena, run_id, &.{
+    .{ .id = req_id, .decision = .approve }, // or .{ .deny = "over limit" }
+});
+```
+
+Deciding only some requests keeps the run suspended with the rest. A live stream can save itself with `s.suspendRun()`, and `resumeStream` continues a run as a stream, showing its pending requests again first. Each run can be resumed once: a second resume gets `error.RunBusy` or `error.NotSuspended`, never a second refund. A run saved by a different version of the agent (changed prompt, model or tools) fails with `error.SnapshotIncompatible`; `cancelRun` abandons it. Pass `.on_approval` to decide inline instead of suspending. `zig build dev -- runs --suspended` lists waiting runs, and `zig build dev -- resume <run_id> approve` decides them.
 
 ### Reasoning
 

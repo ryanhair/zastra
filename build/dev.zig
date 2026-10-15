@@ -6,7 +6,8 @@
 //!   zig build dev -- chat <agent> [--thread t] [--resource r]
 //!   zig build dev -- run <workflow> <json | @file.json> [--resource r]
 //!   zig build dev -- runs [--suspended]
-//!   zig build dev -- resume <run_id> <json | @file.json>
+//!   zig build dev -- resume <run_id> <json | @file.json>       (workflow runs)
+//!   zig build dev -- resume <run_id> approve | deny[:reason] | <decisions json>   (agent runs)
 //!   zig build dev -- graph <workflow>
 //!   zig build dev -- trace <run_id>
 //!   zig build dev -- models [--stale]
@@ -425,11 +426,21 @@ fn chatWith(comptime A: type, rt: *App.Runtime, gpa: Allocator, io: Io, out: Out
                     } else if (comptime std.mem.eql(u8, t, "tool_result")) {
                         out.print("  ← {s} ({d}ms){s}: {s}\n", .{ payload.tool, payload.elapsed_ms, if (payload.is_error) " error" else "", truncate(payload.content, 300) });
                     } else if (comptime std.mem.eql(u8, t, "approval_request")) {
-                        out.print("\n  approve {f}? [y/N] ", .{z.fmt.json(payload.call)});
+                        out.print("\n  approve {f}? [y/N, s = save and decide later] ", .{z.fmt.json(payload.call)});
                         out.flush();
                         const ans = stdin.interface.takeDelimiter('\n') catch null;
-                        const yes = if (ans) |a| (a.len > 0 and (a[0] == 'y' or a[0] == 'Y')) else false;
-                        try s.respond(payload.id, if (yes) .approve else .{ .deny = "Denied by the operator." });
+                        const c: u8 = if (ans) |a| (if (a.len > 0) std.ascii.toLower(a[0]) else 'n') else 'n';
+                        if (c == 's') {
+                            if (comptime A.has_approvals) {
+                                const su = s.suspendRun() catch |err| {
+                                    out.print("error: {t}: {s}\n", .{ err, rt.lastDiagnostic() });
+                                    return 1;
+                                };
+                                out.print("\n  saved run {s} ({d} pending). Later:\n    zig build dev -- resume {s} approve\n", .{ su.run_id, su.requests.len, su.run_id });
+                                return 0;
+                            }
+                        }
+                        try s.respond(payload.id, if (c == 'y') .approve else .{ .deny = "Denied by the operator." });
                     } else if (comptime std.mem.eql(u8, t, "finish")) {
                         const u = payload.usage;
                         out.print("\n  [{t}, {d} steps, {d} in ({d} cached) / {d} out tokens, ${d:.5}]\n", .{ payload.reason, payload.steps, u.totalInput(), u.cache_read_tokens, u.output_tokens, u.cost_usd });
@@ -490,12 +501,17 @@ fn listRuns(rt: *App.Runtime, arena: Allocator, out: Out, rest: []const []const 
     if (runs.len == 0) out.write("no runs\n");
     for (runs) |r| {
         var current = false;
-        inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, r.workflow_id)) {
-            current = r.fingerprint == W.fingerprint_value;
-        };
-        out.print("{s}  {s}  {s}{s}{s}{s}\n", .{
-            r.run_id,                 r.workflow_id, r.status, if (r.suspended_at != null) " at " else "", r.suspended_at orelse "",
-            if (current) "" else "  (snapshot from a different workflow shape)",
+        switch (r.kind) {
+            .workflow => inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, r.owner_id)) {
+                current = r.fingerprint == W.fingerprint_value;
+            },
+            .agent => inline for (App.agents) |A| if (std.mem.eql(u8, A.id, r.owner_id)) {
+                current = r.fingerprint == A.run_fingerprint;
+            },
+        }
+        out.print("{s}  {t} {s}  {s}{s}{s}{s}\n", .{
+            r.run_id,                           r.kind, r.owner_id, r.status, if (r.suspended_at != null) " at " else "", r.suspended_at orelse "",
+            if (current or !std.mem.eql(u8, r.status, "suspended")) "" else "  (saved by a different version; can't resume)",
         });
     }
     return 0;
@@ -512,11 +528,18 @@ fn resumeRun(rt: *App.Runtime, io: Io, arena: Allocator, out: Out, rest: []const
         return 1;
     };
     const text = try readInput(io, arena, rest[1]);
+    if (rec.kind == .agent) {
+        inline for (App.agents) |A| if (std.mem.eql(u8, A.id, rec.owner_id)) {
+            if (comptime A.has_approvals) return resumeAgent(A, rt, arena, out, rest[0], text);
+        };
+        out.print("run '{s}' belongs to agent '{s}', which isn't in this App or has no gated tools\n", .{ rest[0], rec.owner_id });
+        return 1;
+    }
     const at = rec.suspended_at orelse {
         out.print("run '{s}' is {s}, not suspended\n", .{ rest[0], rec.status });
         return 1;
     };
-    inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, rec.workflow_id)) {
+    inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, rec.owner_id)) {
         inline for (W.slots) |slot| {
             if (comptime slot.S != void and isSusp(slot.S)) {
                 if (std.mem.eql(u8, slot.path, at)) {
@@ -537,8 +560,65 @@ fn resumeRun(rt: *App.Runtime, io: Io, arena: Allocator, out: Out, rest: []const
         out.print("run '{s}' is suspended at '{s}', which isn't a suspendable step of the current '{s}'\n", .{ rest[0], at, W.id });
         return 1;
     };
-    out.print("run '{s}' belongs to workflow '{s}', which isn't in this App\n", .{ rest[0], rec.workflow_id });
+    out.print("run '{s}' belongs to workflow '{s}', which isn't in this App\n", .{ rest[0], rec.owner_id });
     return 1;
+}
+
+/// `approve` / `deny[:reason]` decide every pending call; a JSON array
+/// (`[{"id":"...","approve":true}]`) decides some of them.
+fn resumeAgent(comptime A: type, rt: *App.Runtime, arena: Allocator, out: Out, run_id: []const u8, text: []const u8) !u8 {
+    const all: ?z.Decision = if (std.mem.eql(u8, text, "approve"))
+        .approve
+    else if (std.mem.startsWith(u8, text, "deny"))
+        .{ .deny = if (std.mem.startsWith(u8, text, "deny:")) text[5..] else "Denied by the operator." }
+    else
+        null;
+    var decisions: []const z.ApprovalDecision = &.{};
+    if (all == null) {
+        const D = struct { id: []const u8, approve: ?bool = null, deny: ?[]const u8 = null };
+        const ds = std.json.parseFromSliceLeaky([]const D, arena, text, .{}) catch {
+            out.write("decisions: `approve`, `deny[:reason]`, or [{\"id\":\"...\",\"approve\":true}, {\"id\":\"...\",\"deny\":\"reason\"}]\n");
+            return 2;
+        };
+        const list = try arena.alloc(z.ApprovalDecision, ds.len);
+        for (ds, list) |d, *o| o.* = .{ .id = d.id, .decision = if (d.deny) |r| .{ .deny = r } else if (d.approve orelse false) .approve else .{ .deny = "Denied by the operator." } };
+        decisions = list;
+    }
+    var s = rt.agent(A).resumeStream(arena, run_id, decisions) catch |err| {
+        out.print("error: {t}: {s}\n", .{ err, rt.lastDiagnostic() });
+        return 1;
+    };
+    defer s.deinit();
+    while (true) {
+        const ev = s.next() catch |err| {
+            if (err == error.ApprovalPending) {
+                const su = s.suspendRun() catch |e| {
+                    out.print("error: {t}: {s}\n", .{ e, rt.lastDiagnostic() });
+                    return 1;
+                };
+                out.print("\nsuspended again: run {s}, {d} pending\n", .{ su.run_id, su.requests.len });
+                for (su.requests) |req| out.print("  {s}: {f}\n", .{ req.id, z.fmt.json(req.call) });
+                return 0;
+            }
+            out.print("\nerror: {t}: {s}\n", .{ err, rt.lastDiagnostic() });
+            return 1;
+        } orelse break;
+        switch (ev) {
+            inline else => |payload, tag| {
+                const t = @tagName(tag);
+                if (comptime std.mem.eql(u8, t, "text_delta")) {
+                    out.write(payload);
+                } else if (comptime std.mem.eql(u8, t, "approval_request")) {
+                    if (all) |d| try s.respond(payload.id, d);
+                } else if (comptime std.mem.eql(u8, t, "tool_result")) {
+                    out.print("\n  ← {s}{s}: {s}\n", .{ payload.tool, if (payload.is_error) " error" else "", truncate(payload.content, 300) });
+                } else if (comptime std.mem.eql(u8, t, "finish")) {
+                    out.print("\n  [{t}, {d} steps, ${d:.5}]\n", .{ payload.reason, payload.steps, payload.usage.cost_usd });
+                }
+            },
+        }
+    }
+    return 0;
 }
 
 fn isSusp(comptime S: type) bool {

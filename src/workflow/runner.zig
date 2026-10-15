@@ -32,6 +32,8 @@ pub const Error = error{
     SnapshotIncompatible,
     /// The stored state didn't parse.
     CorruptSnapshot,
+    /// Another resume claimed the run first (PLAN.md D32).
+    RunBusy,
 };
 
 pub const StartOptions = struct {
@@ -87,8 +89,8 @@ pub fn Handle(comptime W: type) type {
                 h.st.diagPrint("workflow '{s}': no run '{s}'", .{ W.id, run_id });
                 return error.RunNotFound;
             };
-            if (!std.mem.eql(u8, rec.workflow_id, W.id)) {
-                h.st.diagPrint("run '{s}' belongs to workflow '{s}', not '{s}'", .{ run_id, rec.workflow_id, W.id });
+            if (rec.kind != .workflow or !std.mem.eql(u8, rec.owner_id, W.id)) {
+                h.st.diagPrint("run '{s}' belongs to {t} '{s}', not workflow '{s}'", .{ run_id, rec.kind, rec.owner_id, W.id });
                 return error.WrongWorkflow;
             }
             var state_json = rec.state_json;
@@ -123,6 +125,12 @@ pub fn Handle(comptime W: type) type {
             };
             state.resume_at = at;
             state.resume_json = try json.stringifyAlloc(arena, value);
+            // Only one resume may run: claim the run before executing anything.
+            const claimed = store.claimRun(run_id, "suspended", "running", h.st.nowMs()) catch return error.StorageFailed;
+            if (!claimed) {
+                h.st.diagPrint("workflow '{s}' run '{s}' is already being resumed", .{ W.id, run_id });
+                return error.RunBusy;
+            }
             var x: Exec(W) = .{
                 .st = h.st,
                 .arena = arena,
@@ -202,7 +210,8 @@ fn Exec(comptime W: type) type {
             const body = try json.stringifyAlloc(x.arena, x.state.*);
             store.saveRun(.{
                 .run_id = x.run_id,
-                .workflow_id = W.id,
+                .kind = .workflow,
+                .owner_id = W.id,
                 .fingerprint = W.fingerprint_value,
                 .status = status,
                 .suspended_at = at,

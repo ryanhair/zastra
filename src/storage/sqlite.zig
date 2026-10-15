@@ -27,6 +27,7 @@ extern fn sqlite3_column_text(stmt: ?*sqlite3_stmt, i: c_int) ?[*]const u8;
 extern fn sqlite3_column_bytes(stmt: ?*sqlite3_stmt, i: c_int) c_int;
 extern fn sqlite3_column_int64(stmt: ?*sqlite3_stmt, i: c_int) i64;
 extern fn sqlite3_column_type(stmt: ?*sqlite3_stmt, i: c_int) c_int;
+extern fn sqlite3_changes(db: ?*sqlite3) c_int;
 
 const SQLITE_OK = 0;
 const SQLITE_ROW = 100;
@@ -39,6 +40,7 @@ const SQLITE_TRANSIENT: isize = -1;
 
 const migrations = [_][]const u8{
     @embedFile("migrations/0001_init.sql"),
+    @embedFile("migrations/0002_runs.sql"),
 };
 
 pub const Error = error{ SqliteError, OutOfMemory };
@@ -249,25 +251,27 @@ pub const SqliteStore = struct {
     pub fn saveRun(s: *SqliteStore, r: storage.RunRecord) Error!void {
         s.lock();
         defer s.unlock();
-        var st = try s.prepare("INSERT INTO workflow_runs(run_id, workflow_id, fingerprint, status, suspended_at, state_json, created_at, updated_at) " ++
-            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(run_id) DO UPDATE SET fingerprint = excluded.fingerprint, status = excluded.status, " ++
+        var st = try s.prepare("INSERT INTO runs(run_id, owner_id, fingerprint, status, suspended_at, state_json, created_at, updated_at, kind) " ++
+            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(run_id) DO UPDATE SET fingerprint = excluded.fingerprint, status = excluded.status, " ++
             "suspended_at = excluded.suspended_at, state_json = excluded.state_json, updated_at = excluded.updated_at;");
         defer st.deinit();
         try st.text(1, r.run_id);
-        try st.text(2, r.workflow_id);
+        try st.text(2, r.owner_id);
         try st.int(3, @bitCast(r.fingerprint));
         try st.text(4, r.status);
         try st.optText(5, r.suspended_at);
         try st.text(6, r.state_json);
         try st.int(7, r.created_at);
         try st.int(8, r.updated_at);
+        try st.text(9, @tagName(r.kind));
         try st.done();
     }
 
     fn readRun(st: *Stmt, arena: Allocator) Error!storage.RunRecord {
         return .{
             .run_id = (try st.colText(arena, 0)) orelse "",
-            .workflow_id = (try st.colText(arena, 1)) orelse "",
+            .owner_id = (try st.colText(arena, 1)) orelse "",
+            .kind = std.meta.stringToEnum(storage.RunKind, (try st.colText(arena, 8)) orelse "") orelse .workflow,
             .fingerprint = @bitCast(st.colInt(2)),
             .status = (try st.colText(arena, 3)) orelse "",
             .suspended_at = try st.colText(arena, 4),
@@ -277,12 +281,12 @@ pub const SqliteStore = struct {
         };
     }
 
-    const run_cols = "run_id, workflow_id, fingerprint, status, suspended_at, state_json, created_at, updated_at";
+    const run_cols = "run_id, owner_id, fingerprint, status, suspended_at, state_json, created_at, updated_at, kind";
 
     pub fn loadRun(s: *SqliteStore, arena: Allocator, run_id: []const u8) Error!?storage.RunRecord {
         s.lock();
         defer s.unlock();
-        var st = try s.prepare("SELECT " ++ run_cols ++ " FROM workflow_runs WHERE run_id = ?1;");
+        var st = try s.prepare("SELECT " ++ run_cols ++ " FROM runs WHERE run_id = ?1;");
         defer st.deinit();
         try st.text(1, run_id);
         if (!try st.row()) return null;
@@ -292,14 +296,28 @@ pub const SqliteStore = struct {
     pub fn listRuns(s: *SqliteStore, arena: Allocator, filter: storage.RunFilter) Error![]const storage.RunRecord {
         s.lock();
         defer s.unlock();
-        var st = try s.prepare("SELECT " ++ run_cols ++ " FROM workflow_runs WHERE (?1 IS NULL OR workflow_id = ?1) AND (?2 IS NULL OR status = ?2) ORDER BY updated_at DESC LIMIT ?3;");
+        var st = try s.prepare("SELECT " ++ run_cols ++ " FROM runs WHERE (?1 IS NULL OR owner_id = ?1) AND (?2 IS NULL OR status = ?2) AND (?4 IS NULL OR kind = ?4) ORDER BY updated_at DESC LIMIT ?3;");
         defer st.deinit();
-        try st.optText(1, filter.workflow_id);
+        try st.optText(1, filter.owner_id);
         try st.optText(2, filter.status);
         try st.int(3, filter.limit);
+        try st.optText(4, if (filter.kind) |k| @tagName(k) else null);
         var out: std.ArrayList(storage.RunRecord) = .empty;
         while (try st.row()) try out.append(arena, try readRun(&st, arena));
         return out.items;
+    }
+
+    pub fn claimRun(s: *SqliteStore, run_id: []const u8, from: []const u8, to: []const u8, now: i64) Error!bool {
+        s.lock();
+        defer s.unlock();
+        var st = try s.prepare("UPDATE runs SET status = ?3, updated_at = ?4 WHERE run_id = ?1 AND status = ?2;");
+        defer st.deinit();
+        try st.text(1, run_id);
+        try st.text(2, from);
+        try st.text(3, to);
+        try st.int(4, now);
+        try st.done();
+        return sqlite3_changes(s.db) == 1;
     }
 };
 
@@ -317,9 +335,31 @@ test SqliteStore {
     try iface.putWorkingMemory("c1", "a", 43, "{\"x\":2}", 2);
     const w = (try iface.getWorkingMemory(arena.allocator(), "c1", "a")).?;
     try std.testing.expectEqual(@as(u64, 43), w.fingerprint);
-    try iface.saveRun(.{ .run_id = "r1", .workflow_id = "w", .fingerprint = 0xFFFF_FFFF_FFFF_FFFF, .status = "suspended", .suspended_at = "s", .state_json = "{}", .created_at = 1, .updated_at = 1 });
+    try iface.saveRun(.{ .run_id = "r1", .kind = .workflow, .owner_id = "w", .fingerprint = 0xFFFF_FFFF_FFFF_FFFF, .status = "suspended", .suspended_at = "s", .state_json = "{}", .created_at = 1, .updated_at = 1 });
     const r = (try iface.loadRun(arena.allocator(), "r1")).?;
     try std.testing.expectEqual(@as(u64, 0xFFFF_FFFF_FFFF_FFFF), r.fingerprint);
     const runs = try iface.listRuns(arena.allocator(), .{ .status = "suspended" });
     try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(storage.RunKind.workflow, runs[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), (try iface.listRuns(arena.allocator(), .{ .kind = .agent })).len);
+    // claimRun is a compare-and-set on the status.
+    try std.testing.expect(try iface.claimRun("r1", "suspended", "running", 2));
+    try std.testing.expect(!try iface.claimRun("r1", "suspended", "running", 3));
+    try std.testing.expect(!try iface.claimRun("nope", "suspended", "running", 3));
+}
+
+test "migration 0002 renames workflow_runs and keeps v1 rows" {
+    var s = try SqliteStore.open(std.testing.allocator, std.testing.io, ":memory:");
+    defer s.close();
+    // Rebuild the v1 shape with a row in it, then re-run 0002.
+    try s.exec("DROP TABLE runs;");
+    try s.exec("CREATE TABLE workflow_runs (run_id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, fingerprint INTEGER NOT NULL, status TEXT NOT NULL, " ++
+        "suspended_at TEXT, state_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);");
+    try s.exec("INSERT INTO workflow_runs VALUES ('r0','handle_ticket',1,'suspended','approve','{}',1,1);");
+    try s.exec(@embedFile("migrations/0002_runs.sql"));
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = (try s.storageIface().loadRun(arena.allocator(), "r0")).?;
+    try std.testing.expectEqual(storage.RunKind.workflow, r.kind);
+    try std.testing.expectEqualStrings("handle_ticket", r.owner_id);
 }

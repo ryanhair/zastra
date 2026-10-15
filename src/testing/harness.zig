@@ -20,6 +20,9 @@ pub fn Options(comptime Ctx: type) type {
         gpa: ?Allocator = null,
         io: ?std.Io = null,
         env: ?*const std.process.Environ.Map = null,
+        /// For `.storage = .sqlite` Apps: a file path lets a second harness
+        /// reopen the same database (a "restart").
+        storage_path: []const u8 = ":memory:",
     };
 }
 
@@ -37,7 +40,7 @@ pub fn harness(comptime AppT: type, opts: Options(AppT.Context)) !*Harness(AppT)
     h.rt = try AppT.init(gpa, opts.io orelse std.testing.io, .{
         .ctx = opts.ctx,
         .env = opts.env,
-        .storage_path = ":memory:",
+        .storage_path = opts.storage_path,
         .testing = .{ .replay = &h.replay, .clock_ms = fakeClock },
     });
     return h;
@@ -133,12 +136,24 @@ pub fn Harness(comptime AppT: type) type {
                 h: *Self,
                 inner: @import("../app.zig").AgentHandle(A),
 
-                pub fn generate(a: @This(), input: anytype, opts: run.Options(A)) !run.GenerateResult(A) {
+                pub fn generate(a: @This(), input: anytype, opts: run.Options(A)) !run.Result(A) {
                     return a.inner.generate(a.h.arena.allocator(), input, opts);
                 }
 
                 pub fn stream(a: @This(), input: anytype, opts: run.Options(A)) !*run.Stream(A) {
                     return a.inner.stream(a.h.arena.allocator(), input, opts);
+                }
+
+                pub fn resumeRun(a: @This(), run_id: []const u8, decisions: []const run.ApprovalDecision) !run.RunResult(A) {
+                    return a.inner.resumeRun(a.h.arena.allocator(), run_id, decisions);
+                }
+
+                pub fn resumeStream(a: @This(), run_id: []const u8, decisions: []const run.ApprovalDecision) !*run.Stream(A) {
+                    return a.inner.resumeStream(a.h.arena.allocator(), run_id, decisions);
+                }
+
+                pub fn cancelRun(a: @This(), run_id: []const u8) !void {
+                    return a.inner.cancelRun(a.h.arena.allocator(), run_id);
                 }
             };
         }

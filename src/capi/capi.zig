@@ -22,7 +22,7 @@ const Status = enum(c_int) {
     approval_pending = -2,
     canceled = -3,
     invalid_input = -4,
-    approval_required = -5,
+    // -5 was APPROVAL_REQUIRED in ABI v1; gated agents now suspend instead.
     abi_mismatch = -6,
 };
 
@@ -86,6 +86,8 @@ const StreamObj = struct {
     const VT = struct {
         next: *const fn (s: *StreamObj, out: *Event) Status,
         respond: *const fn (s: *StreamObj, id: []const u8, d: ev.Decision) Status,
+        /// Save the run while approvals are pending; the suspended result JSON.
+        @"suspend": *const fn (s: *StreamObj) ?[]const u8,
         result: *const fn (s: *StreamObj) ?[]const u8,
         diag: *const fn (s: *StreamObj) []const u8,
         deinit: *const fn (s: *StreamObj) void,
@@ -226,10 +228,10 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                     return null;
                 };
                 const r = run.generate(A, a.rt.state(), aa, msgs, .{ .thread = o.thread, .resource = o.resource, .max_steps = o.max_steps, .max_tokens = o.max_tokens }) catch |e| {
-                    setErr(err, if (e == error.ApprovalRequired) .approval_required else .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
+                    setErr(err, .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
                     return null;
                 };
-                return makeResult(agentResultJson(A, aa, r) catch return null);
+                return makeResult(runResultJson(A, aa, r) catch return null);
             };
             setErr(err, .invalid_input, "no agent with id {d}", .{agent_id});
             return null;
@@ -243,10 +245,42 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
             };
         }
 
+        /// `{"status":"completed",...}` or, for gated agents,
+        /// `{"status":"suspended","run_id":...,"requests":[{"id","tool","input"}]}`.
+        fn runResultJson(comptime A: type, arena: Allocator, r: run.Result(A)) ![]const u8 {
+            if (comptime !A.has_approvals) return agentResultJson(A, arena, r);
+            return switch (r) {
+                .completed => |c| agentResultJson(A, arena, c),
+                .suspended => |su| suspendedJson(A, arena, su),
+            };
+        }
+
+        fn suspendedJson(comptime A: type, arena: Allocator, su: run.Suspended(A)) ![]const u8 {
+            var aw: std.Io.Writer.Allocating = .init(arena);
+            const w = &aw.writer;
+            try w.writeAll("{\"status\":\"suspended\",\"run_id\":");
+            try json.writeString(su.run_id, w);
+            try w.writeAll(",\"requests\":[");
+            for (su.requests, 0..) |req, i| {
+                if (i > 0) try w.writeByte(',');
+                try w.writeAll("{\"id\":");
+                try json.writeString(req.id, w);
+                switch (req.call) {
+                    inline else => |input, tag| {
+                        try w.print(",\"tool\":\"{s}\",\"input\":", .{@tagName(tag)});
+                        try json.write(input, w);
+                    },
+                }
+                try w.writeByte('}');
+            }
+            try w.writeAll("]}");
+            return aw.written();
+        }
+
         fn agentResultJson(comptime A: type, arena: Allocator, r: run.GenerateResult(A)) ![]const u8 {
             var aw: std.Io.Writer.Allocating = .init(arena);
             const w = &aw.writer;
-            try w.writeAll("{\"text\":");
+            try w.writeAll("{\"status\":\"completed\",\"text\":");
             try json.writeString(r.text, w);
             if (A.has_output_type) {
                 try w.writeAll(",\"output\":");
@@ -258,6 +292,74 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
             try json.write(r.usage, w);
             try w.writeByte('}');
             return aw.written();
+        }
+
+        /// decisions_json: `[{"id":"...","approve":true}, {"id":"...","deny":"reason"}]`.
+        fn parseDecisions(arena: Allocator, text: []const u8, err: ?*Error) ?[]const run.ApprovalDecision {
+            const D = struct { id: []const u8, approve: ?bool = null, deny: ?[]const u8 = null };
+            const ds = std.json.parseFromSliceLeaky([]const D, arena, text, .{ .ignore_unknown_fields = true }) catch {
+                setErr(err, .invalid_input, "decisions_json must be an array like [{{\"id\":\"...\",\"approve\":true}}] or [{{\"id\":\"...\",\"deny\":\"reason\"}}]", .{});
+                return null;
+            };
+            const out = arena.alloc(run.ApprovalDecision, ds.len) catch return null;
+            for (ds, out) |d, *o| o.* = .{ .id = d.id, .decision = if (d.deny) |r| .{ .deny = r } else if (d.approve orelse false) .approve else .{ .deny = "Denied." } };
+            return out;
+        }
+
+        fn agentResume(h: ?*AppHandle, agent_id: c_int, run_id: ?[*:0]const u8, decisions_json: ?[*:0]const u8, err: ?*Error) callconv(.c) ?*Result {
+            clearErr(err);
+            const a = h orelse return null;
+            inline for (App.agents, 0..) |A, i| if (i == agent_id) {
+                if (comptime !A.has_approvals) {
+                    setErr(err, .invalid_input, "agent '{s}' has no approval-gated tools; its runs never suspend", .{A.id});
+                    return null;
+                }
+                var arena: std.heap.ArenaAllocator = .init(gpa);
+                defer arena.deinit();
+                const aa = arena.allocator();
+                const ds = parseDecisions(aa, span(decisions_json) orelse "[]", err) orelse return null;
+                const r = run.resumeRun(A, a.rt.state(), aa, span(run_id) orelse "", ds) catch |e| {
+                    setErr(err, .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
+                    return null;
+                };
+                return makeResult(runResultJson(A, aa, r) catch return null);
+            };
+            setErr(err, .invalid_input, "no agent with id {d}", .{agent_id});
+            return null;
+        }
+
+        fn agentResumeStream(h: ?*AppHandle, agent_id: c_int, run_id: ?[*:0]const u8, decisions_json: ?[*:0]const u8, err: ?*Error) callconv(.c) ?*StreamObj {
+            clearErr(err);
+            const a = h orelse return null;
+            inline for (App.agents, 0..) |A, i| if (i == agent_id) {
+                if (comptime !A.has_approvals) {
+                    setErr(err, .invalid_input, "agent '{s}' has no approval-gated tools; its runs never suspend", .{A.id});
+                    return null;
+                }
+                return Streams(A).reopen(a, span(run_id) orelse "", span(decisions_json) orelse "[]", err);
+            };
+            setErr(err, .invalid_input, "no agent with id {d}", .{agent_id});
+            return null;
+        }
+
+        fn agentCancel(h: ?*AppHandle, agent_id: c_int, run_id: ?[*:0]const u8, err: ?*Error) callconv(.c) c_int {
+            clearErr(err);
+            const a = h orelse return @intFromEnum(Status.err);
+            inline for (App.agents, 0..) |A, i| if (i == agent_id) {
+                if (comptime !A.has_approvals) {
+                    setErr(err, .invalid_input, "agent '{s}' has no approval-gated tools; its runs never suspend", .{A.id});
+                    return @intFromEnum(Status.invalid_input);
+                }
+                var arena: std.heap.ArenaAllocator = .init(gpa);
+                defer arena.deinit();
+                run.cancelRun(A, a.rt.state(), arena.allocator(), span(run_id) orelse "") catch |e| {
+                    setErr(err, .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
+                    return @intFromEnum(Status.err);
+                };
+                return @intFromEnum(Status.ok);
+            };
+            setErr(err, .invalid_input, "no agent with id {d}", .{agent_id});
+            return @intFromEnum(Status.invalid_input);
         }
 
         fn agentStream(h: ?*AppHandle, agent_id: c_int, input: ?[*:0]const u8, opts_json: ?[*:0]const u8, err: ?*Error) callconv(.c) ?*StreamObj {
@@ -286,6 +388,19 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                     return so;
                 }
 
+                fn reopen(a: *AppHandle, run_id: []const u8, decisions_json: []const u8, err: ?*Error) ?*StreamObj {
+                    const so = gpa.create(StreamObj) catch return null;
+                    so.* = .{ .ptr = undefined, .vt = &vt, .arena = .init(gpa), .scratch = .init(gpa) };
+                    const aa = so.arena.allocator();
+                    const ds = parseDecisions(aa, decisions_json, err) orelse return fail(so);
+                    const s = run.resumeStream(A, a.rt.state(), aa, aa.dupe(u8, run_id) catch return fail(so), ds) catch |e| {
+                        setErr(err, .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
+                        return fail(so);
+                    };
+                    so.ptr = s;
+                    return so;
+                }
+
                 fn fail(so: *StreamObj) ?*StreamObj {
                     so.arena.deinit();
                     so.scratch.deinit();
@@ -293,7 +408,14 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                     return null;
                 }
 
-                const vt: StreamObj.VT = .{ .next = nextImpl, .respond = respondImpl, .result = resultImpl, .diag = diagImpl, .deinit = deinitImpl };
+                const vt: StreamObj.VT = .{ .next = nextImpl, .respond = respondImpl, .@"suspend" = suspendImpl, .result = resultImpl, .diag = diagImpl, .deinit = deinitImpl };
+
+                fn suspendImpl(so: *StreamObj) ?[]const u8 {
+                    if (comptime !A.has_approvals) return null;
+                    const su = st(so).suspendRun() catch return null;
+                    so.done = true;
+                    return suspendedJson(A, so.arena.allocator(), su) catch null;
+                }
 
                 fn st(so: *StreamObj) *S {
                     return @ptrCast(@alignCast(so.ptr));
@@ -419,7 +541,7 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                 setErr(err, .invalid_input, "no run '{s}'", .{rid});
                 return null;
             };
-            inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, rec.workflow_id)) {
+            inline for (App.workflows) |W| if (rec.kind == .workflow and std.mem.eql(u8, W.id, rec.owner_id)) {
                 inline for (W.suspendable_steps) |S| if (std.mem.eql(u8, step.idOf(S), sid)) {
                     var issue: parse.Issue = .{};
                     const value = parse.parse(S.Resume, aa, span(resume_json) orelse "null", &issue) catch {
@@ -435,7 +557,7 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                 setErr(err, .invalid_input, "workflow '{s}' has no suspendable step '{s}'", .{ W.id, sid });
                 return null;
             };
-            setErr(err, .invalid_input, "run '{s}' belongs to workflow '{s}', which isn't in this library", .{ rid, rec.workflow_id });
+            setErr(err, .invalid_input, "run '{s}' belongs to {t} '{s}', which isn't a workflow in this library", .{ rid, rec.kind, rec.owner_id });
             return null;
         }
     };
@@ -444,12 +566,16 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
     @export(&Impl.appFree, .{ .name = lib ++ "_app_free" });
     @export(&Impl.agentGenerate, .{ .name = lib ++ "_agent_generate" });
     @export(&Impl.agentStream, .{ .name = lib ++ "_agent_stream" });
+    @export(&Impl.agentResume, .{ .name = lib ++ "_agent_resume" });
+    @export(&Impl.agentResumeStream, .{ .name = lib ++ "_agent_resume_stream" });
+    @export(&Impl.agentCancel, .{ .name = lib ++ "_agent_cancel" });
     @export(&Impl.workflowStart, .{ .name = lib ++ "_workflow_start" });
     @export(&Impl.workflowResume, .{ .name = lib ++ "_workflow_resume" });
     @export(&abiVersion, .{ .name = "zastra_abi_version" });
     @export(&streamNext, .{ .name = "zastra_stream_next" });
     @export(&streamRespond, .{ .name = "zastra_stream_respond" });
     @export(&streamCancel, .{ .name = "zastra_stream_cancel" });
+    @export(&streamSuspend, .{ .name = "zastra_stream_suspend" });
     @export(&streamResult, .{ .name = "zastra_stream_result" });
     @export(&streamFree, .{ .name = "zastra_stream_free" });
     @export(&streamError, .{ .name = "zastra_stream_error" });
@@ -488,6 +614,16 @@ fn streamRespond(s: ?*StreamObj, approval_id: ?[*:0]const u8, decision_json: ?[*
 fn streamCancel(s: ?*StreamObj) callconv(.c) void {
     const so = s orelse return;
     so.canceled.store(true, .release);
+}
+
+fn streamSuspend(s: ?*StreamObj, err: ?*Error) callconv(.c) ?*Result {
+    clearErr(err);
+    const so = s orelse return null;
+    const bytes = so.vt.@"suspend"(so) orelse {
+        setErr(err, .err, "{s}", .{so.vt.diag(so)});
+        return null;
+    };
+    return makeResult(bytes);
 }
 
 fn streamResult(s: ?*StreamObj, err: ?*Error) callconv(.c) ?*Result {

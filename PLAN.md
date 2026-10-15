@@ -608,7 +608,7 @@ Structured output, used when `.output = T`:
 
 Approvals:
 - `stream.respond(id, .approve | .{ .deny = reason })` resumes the run.
-- In `generate` (non-streaming), an approval request returns `error.ApprovalRequired` with the pending call. Alternatively, `opts.on_approval` can supply a callback.
+- In `generate` (non-streaming), an agent with gated tools returns `.suspended` with the pending calls, after saving the run (v1.1, D31; v1 returned `error.ApprovalRequired`). Alternatively, `opts.on_approval` can supply a callback.
 - Approval state is held in memory only in v1. Persisting a paused agent run is v1.1; workflows already persist.
 - An agent called from a workflow step (`w.agent(A)` or `z.step.agent`) can't pause for approval in v1, because the paused agent run can't be persisted in the workflow snapshot. Using an agent with any approval-gated tool there fails to compile (D18):
   ```
@@ -655,10 +655,12 @@ threads(id TEXT PRIMARY KEY, resource TEXT, created_at INTEGER, updated_at INTEG
 messages(id INTEGER PRIMARY KEY, thread_id TEXT, seq INTEGER, role TEXT, content_json TEXT, created_at INTEGER)
 working_memory(resource TEXT, agent_id TEXT, value_json TEXT, fingerprint INTEGER, updated_at INTEGER,
                PRIMARY KEY(resource, agent_id))
-workflow_runs(run_id TEXT PRIMARY KEY, workflow_id TEXT, fingerprint INTEGER, status TEXT,
-              suspended_at TEXT, state_json TEXT, created_at INTEGER, updated_at INTEGER)
+runs(run_id TEXT PRIMARY KEY, kind TEXT, owner_id TEXT, fingerprint INTEGER, status TEXT,
+     suspended_at TEXT, state_json TEXT, created_at INTEGER, updated_at INTEGER)
 schema_version(version INTEGER)
 ```
+
+(v1 named the runs table `workflow_runs`, with `workflow_id` and no `kind`; migration 0002 renames it, D32.)
 
 - Migrations are embedded with `@embedFile` and applied in `App.init`.
 - A working-memory fingerprint mismatch (because `T` changed) resets to the default and logs a warning. v1.1 adds migrations.
@@ -798,7 +800,7 @@ Design: **JSON at the edges.** Inputs and outputs cross as UTF-8 JSON validated 
 
 Generated header (`<lib>.h`):
 - `<lib>_app_new(config_json, *err)` and `<lib>_app_free(app)`
-- `<lib>_agent_generate(app, AGENT_ID, input, opts_json, *err)` returns `*zastra_result`. If an approval is needed it fails with `ZASTRA_ERR_APPROVAL_REQUIRED`; use the stream API for approval-gated agents.
+- `<lib>_agent_generate(app, AGENT_ID, input, opts_json, *err)` returns `*zastra_result`. For an agent with gated tools that can be `{"status":"suspended","run_id",...}`; `<lib>_agent_resume` continues it (ABI v2, §17.3).
 - `<lib>_agent_stream(app, AGENT_ID, input, opts_json, *err)` returns `*zastra_stream`
 - Streaming is **pull-based**, mirroring Zig's `stream.next()` (D14):
   - `zastra_stream_next(s, *zastra_event) → zastra_status`: `ZASTRA_OK` with an event, `ZASTRA_DONE`, or an error code. `zastra_event { zastra_event_kind kind; const char *json; size_t len; const char *approval_id; }`; its pointers stay valid until the next `next` call.
@@ -965,6 +967,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D31 | Saved approvals API | An agent with approval-gated tools returns `union { completed, suspended }` from `generate`; resume by id with `resumeRun` / `resumeStream`, like workflows. Replaces `error.ApprovalRequired`. Agents without gated tools are unchanged. (§17.3) |
 | D32 | Agent run storage | One `runs` table with `kind` (migration 0002); atomic `claimRun` compare-and-set before every resume, for agents and workflows (fixes a v1 double-resume race). (§17.3) |
 | D33 | Partial approval decisions | Allowed: decided ids are saved, the run stays suspended with the rest. (§17.3) |
+| D41 | Suspending a live stream | `s.suspendRun()`, not `s.suspend()`: `suspend` is still a Zig keyword. The C ABI matches with `zastra_stream_suspend`, and adds `<lib>_agent_cancel`; every agent result JSON now has `"status"`. (§17.3) |
 | D34 | Gated agents in workflow steps | `z.step.agent` with a gated agent becomes suspendable automatically (`z.Approvals(A)` / `z.Decisions(A)`); custom steps use `w.agent(A).run`, which resumes the saved agent run on replay. Parallel branches still can't suspend. Supersedes D18's compile error. (§17.4) |
 | D35 | OpenAI API | Catalog `openai/*` models use the Responses API, with `store: false`; `openai_compat` (Chat Completions) remains for third-party servers. (§17.2) |
 | D36 | OpenAI reasoning items | Round-tripped within a run as opaque blocks; dropped from history loaded across runs, like D30, until live evidence says otherwise. (§17.2) |
@@ -972,7 +975,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D38 | MCP client era and auth | Dual-era: 2026-07-28 first, falling back to 2025-11-25 `initialize` on stdio and HTTP; HTTP+SSE (2024-11-05) unsupported. No sampling/elicitation/roots (`InputRequiredResult` becomes a tool error). HTTP auth is static headers and a bearer token from the env; OAuth deferred. (§17.5) |
 | D39 | MCP tool list refresh | Via `subscriptions/listen`, legacy `list_changed` notifications, or `ttlMs`; applied at the next run start, tools sorted for stable prefixes. (§17.5) |
 | D40 | MCP schema validation | Adds local `$ref`, `allOf`, conditionals and `prefixItems` with depth/size bounds; unsupported schemas skip validation with a warning instead of hiding the tool. (§17.5) |
-| O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **Implemented default:** return the error (with a diagnostic naming the tool). |
+| O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
 | D18 | Approval-gated agents inside workflow steps | **Superseded in v1.1 by D34.** **v1: compile error** when `w.agent(A)` or `z.step.agent(A, ...)` uses an agent that has any approval-gated tool (§6.4). The message names the tool and points at `Suspend`/`Resume` steps. **v1.1:** with persisted agent runs (D9), the step suspends the workflow instead. Rejected: auto-denying gated calls at runtime, which is silent and surprising. |
@@ -1221,7 +1224,7 @@ var s = try rt.agent(Support).resumeStream(arena, run_id, decisions);
 
 **Semantics:**
 - `generate` no longer returns `error.ApprovalRequired`. It returns `.suspended` after saving a snapshot. `.on_approval` still decides inline and never suspends.
-- In a live stream, `s.respond(id, decision)` is unchanged. `s.suspend()` saves the snapshot and returns the `Suspended` value, so a UI can stop waiting.
+- In a live stream, `s.respond(id, decision)` is unchanged. `s.suspendRun()` saves the snapshot and returns the `Suspended` value, so a UI can stop waiting (D41).
 - **Partial decisions (D33).** `resumeRun` with only some ids decided saves them and returns `.suspended` with the rest. An unknown id is `error.UnknownApproval`, with the pending ids in the diagnostic.
 - **What a snapshot holds:**
   - the run's messages so far (including the assistant turn with the tool uses and its thinking blocks, which stay valid because the run continues)
@@ -1254,6 +1257,17 @@ The memory backend matches. The vtable gains `claimRun(run_id, from_status, to_s
 - A compile-fail for switching on `.suspended` for an agent without gated tools.
 - `embed.c` covers suspend and resume.
 - A live suspend/resume across two processes.
+
+**Implemented (N3, 2026-10-15):**
+- `run.Result(A)` / `RunResult(A)` / `Suspended(A)`, `ApprovalDecision`; `resumeRun`, `resumeStream` (re-emits pending `approval_request` events), `cancelRun` and `s.suspendRun()`. Calling the run methods on an agent without gated tools is a hand-written compile error.
+- Snapshot: messages (with loaded history and `new_from`), each call's id and approval state (calls are rebuilt from the last assistant turn), step, usage, `repair_used`, working memory, thread, resource, `max_steps`, `max_tokens`, trace id. Once saved, a run's final status (`completed`, `failed`, `canceled`) is recorded too.
+- Fingerprint: the request prefix hash, plus per-tool hashes in the snapshot so the diagnostic says "tool 'issue_refund' changed" (or added/removed, or "instructions, model or settings changed").
+- Decision ids are all checked before the run is claimed, so `UnknownApproval` changes nothing. A run that is `running` reports `RunBusy`; finished ones `NotSuspended`.
+- Storage: migration 0002 (verified on a real v1 database), `RunKind`, `RunFilter.kind`/`.owner_id`, `claimRun` on both backends; workflow `resumeStep` claims too (`error.RunBusy`).
+- C ABI v2: suspended results, `_agent_resume`, `_agent_resume_stream`, `_agent_cancel`, `zastra_stream_suspend`; `APPROVAL_REQUIRED` (-5) retired.
+- Dev CLI: `s` at a chat approval prompt saves and exits; `resume <run_id> approve | deny[:reason] | <json>` for agent runs; `runs` shows kind and owner.
+- Tests: 6 harness tests (`tests/approval_test.zig`, including a SQLite restart that carries a thinking block's signature across it), the migration on a v1-shaped table, `claimRun`, 2 compile-fail cases. `embed.c` suspends and resumes when keys are real; CI exercises its error paths with fake keys.
+- Live (gpt-5.4-mini, SQLite): process 1 looked the order up and suspended at `issue_refund`; process 2 approved, the refund ran once and the run completed (3 steps); a second resume got `NotSuspended`.
 
 ### 17.4 N4: approval-gated agents in workflows (D34; supersedes the D18 compile error)
 

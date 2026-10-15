@@ -6,7 +6,7 @@ const json_schema = @import("../schema/json_schema.zig");
 const manifest = @import("manifest.zig");
 const step = @import("../workflow/step.zig");
 
-pub const abi_version: u32 = 1;
+pub const abi_version: u32 = 2;
 
 fn cString(comptime s: []const u8) []const u8 {
     comptime {
@@ -50,7 +50,6 @@ pub fn render(comptime App: type, comptime lib: []const u8) []const u8 {
             \\    ZASTRA_ERR_APPROVAL_PENDING = -2,
             \\    ZASTRA_ERR_CANCELED = -3,
             \\    ZASTRA_ERR_INVALID_INPUT = -4,
-            \\    ZASTRA_ERR_APPROVAL_REQUIRED = -5,
             \\    ZASTRA_ERR_ABI_MISMATCH = -6
             \\} zastra_status;
             \\
@@ -82,6 +81,10 @@ pub fn render(comptime App: type, comptime lib: []const u8) []const u8 {
             \\zastra_status zastra_stream_respond(zastra_stream *s, const char *approval_id, const char *decision_json, zastra_error *err);
             \\/* Safe from any thread. */
             \\void zastra_stream_cancel(zastra_stream *s);
+            \\/* While next() returns ZASTRA_ERR_APPROVAL_PENDING: save the run and stop.
+            \\ * Returns {"status":"suspended","run_id":...,"requests":[...]}; resume it later
+            \\ * with <lib>_agent_resume or <lib>_agent_resume_stream (caller frees). */
+            \\zastra_result *zastra_stream_suspend(zastra_stream *s, zastra_error *err);
             \\/* After ZASTRA_DONE: the collected result (caller frees). */
             \\zastra_result *zastra_stream_result(zastra_stream *s, zastra_error *err);
             \\/* Why the last zastra_stream_next() returned an error ("" if it didn't). */
@@ -132,8 +135,15 @@ pub fn render(comptime App: type, comptime lib: []const u8) []const u8 {
             "#define " ++ lib ++ "_app_new(config_json, err) " ++ lib ++ "_app_new_checked((config_json), " ++ L ++ "_MANIFEST_FINGERPRINT, (err))\n" ++
             "void " ++ lib ++ "_app_free(zastra_app *app);\n\n" ++
             "/* input: plain text, or a JSON array of messages. opts_json: {\"thread\",\"resource\",\"max_steps\"} or NULL. */\n" ++
+            "/* Results: {\"status\":\"completed\",\"text\",\"output\",\"steps\",\"finish_reason\",\"run_id\",\"usage\"}, or for agents with\n" ++
+            " * approval-gated tools {\"status\":\"suspended\",\"run_id\",\"requests\":[{\"id\",\"tool\",\"input\"}]} (the run is saved). */\n" ++
             "zastra_result *" ++ lib ++ "_agent_generate(zastra_app *app, int agent_id, const char *input, const char *opts_json, zastra_error *err);\n" ++
-            "zastra_stream *" ++ lib ++ "_agent_stream(zastra_app *app, int agent_id, const char *input, const char *opts_json, zastra_error *err);\n\n" ++
+            "zastra_stream *" ++ lib ++ "_agent_stream(zastra_app *app, int agent_id, const char *input, const char *opts_json, zastra_error *err);\n" ++
+            "/* decisions_json: [{\"id\":\"...\",\"approve\":true}, {\"id\":\"...\",\"deny\":\"reason\"}]. Undecided requests keep the run suspended. */\n" ++
+            "zastra_result *" ++ lib ++ "_agent_resume(zastra_app *app, int agent_id, const char *run_id, const char *decisions_json, zastra_error *err);\n" ++
+            "zastra_stream *" ++ lib ++ "_agent_resume_stream(zastra_app *app, int agent_id, const char *run_id, const char *decisions_json, zastra_error *err);\n" ++
+            "/* Abandon a suspended run. */\n" ++
+            "zastra_status " ++ lib ++ "_agent_cancel(zastra_app *app, int agent_id, const char *run_id, zastra_error *err);\n\n" ++
             "/* Results: {\"status\":\"completed\",\"output\":...} | {\"status\":\"suspended\",\"run_id\",\"at\",\"payload\"} | {\"status\":\"failed\",\"step\",\"error\",\"message\"} */\n" ++
             "zastra_result *" ++ lib ++ "_workflow_start(zastra_app *app, int workflow_id, const char *input_json, zastra_error *err);\n" ++
             "zastra_result *" ++ lib ++ "_workflow_resume(zastra_app *app, const char *run_id, const char *step_id, const char *resume_json, zastra_error *err);\n\n" ++

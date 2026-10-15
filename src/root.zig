@@ -32,6 +32,8 @@ pub const custom = catalog.custom;
 // ── declarations ─────────────────────────────────────────────────────────────
 pub const Agent = @import("agent/agent.zig").Agent;
 pub const App = @import("app.zig").App;
+/// `rt.agent(A)`: `.Result`, `.Options`, `.Stream` and the run methods.
+pub const AgentHandle = @import("app.zig").AgentHandle;
 pub const ToolCtx = @import("context.zig").ToolCtx;
 pub const Partial = @import("schema/partial.zig").Partial;
 pub const mcp = struct {
@@ -51,6 +53,8 @@ pub const trace = struct {
     pub const off: Config = .off;
 };
 pub const Decision = @import("agent/events.zig").Decision;
+/// One decision for `resumeRun`/`resumeStream`: `.{ .id = req.id, .decision = .approve }`.
+pub const ApprovalDecision = @import("agent/run.zig").ApprovalDecision;
 
 // ── workflows ────────────────────────────────────────────────────────────────
 pub const Workflow = @import("workflow/workflow.zig").Workflow;

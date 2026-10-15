@@ -97,6 +97,29 @@ pub fn main(init: std.process.Init) !void {
         };
     }
 
+    // ── 2b. Approvals decided later: suspend, then resume from anywhere ─────
+    {
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        // Support has an approval-gated tool, so `generate` returns a union:
+        // the run is saved to storage when a call needs a decision (D31).
+        const r = try rt.agent(app.Support).generate(arena.allocator(), "Refund ORD-1042 in full.", .{ .thread = "ticket-8813" });
+        switch (r) {
+            .completed => |c| std.log.info("{s}", .{c.text}),
+            .suspended => |s| {
+                for (s.requests) |req| switch (req.call) {
+                    .issue_refund => |in| std.log.info("waiting: {d}¢ on {s} (run {s}, request {s})", .{ in.amount_cents, in.order_id, s.run_id, req.id }),
+                };
+                // ...later, in this process or another one with the same storage.
+                // Leaving a request out keeps the run suspended with it (D33).
+                const done = try rt.agent(app.Support).resumeRun(arena.allocator(), s.run_id, &.{
+                    .{ .id = s.requests[0].id, .decision = .{ .deny = "Over limit; escalate." } },
+                });
+                std.debug.assert(done == .completed);
+            },
+        }
+    }
+
     // ── 3. Workflow: start, suspend, persist, resume (possibly days later) ───
     {
         var arena: std.heap.ArenaAllocator = .init(gpa);

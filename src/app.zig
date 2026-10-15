@@ -320,7 +320,9 @@ pub fn AgentHandle(comptime A: type) type {
     return struct {
         st: *runtime.State,
 
-        pub const Result = run.GenerateResult(A);
+        /// `union { completed, suspended }` for an agent with approval-gated
+        /// tools, otherwise the plain result struct (PLAN.md D31, D22).
+        pub const Result = run.Result(A);
         pub const Options = run.Options(A);
         pub const Stream = run.Stream(A);
 
@@ -334,6 +336,29 @@ pub fn AgentHandle(comptime A: type) type {
         pub fn stream(h: @This(), arena: Allocator, input: anytype, opts: Options) run.Error!*Stream {
             const msgs = try run.toMessages(arena, input);
             return Stream.init(h.st, arena, msgs, opts);
+        }
+
+        /// Continue a suspended run with decisions for some or all of its
+        /// pending approvals. Works in any process with the same storage.
+        pub fn resumeRun(h: @This(), arena: Allocator, run_id: []const u8, decisions: []const run.ApprovalDecision) run.Error!run.RunResult(gated()) {
+            return run.resumeRun(A, h.st, arena, run_id, decisions);
+        }
+
+        /// Like `resumeRun`, as a stream. Approvals still pending are emitted
+        /// again first.
+        pub fn resumeStream(h: @This(), arena: Allocator, run_id: []const u8, decisions: []const run.ApprovalDecision) run.Error!*run.Stream(gated()) {
+            return run.resumeStream(A, h.st, arena, run_id, decisions);
+        }
+
+        /// Abandon a suspended run (marked `canceled`).
+        pub fn cancelRun(h: @This(), arena: Allocator, run_id: []const u8) run.Error!void {
+            _ = gated();
+            return run.cancelRun(A, h.st, arena, run_id);
+        }
+
+        fn gated() type {
+            if (!A.has_approvals) @import("meta/errors.zig").fail("agent '{s}' has no approval-gated tools, so its runs never suspend; there is nothing to resume or cancel", .{A.id});
+            return A;
         }
     };
 }
