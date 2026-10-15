@@ -359,9 +359,9 @@ test "large refunds pause for approval and resume after a restart" {
     defer db.close();
     var mailer: notify.Mailer = .{};
     var ctx: Ctx = .{ .db = &db, .mailer = &mailer };
-    const path = ".zig-cache/zastra-example-restart.sqlite";
-    std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
-    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    const path = "zastra-example-restart.sqlite";
+    inline for (.{ "", "-wal", "-shm" }) |sfx| std.Io.Dir.cwd().deleteFile(std.testing.io, path ++ sfx) catch {};
+    defer inline for (.{ "", "-wal", "-shm" }) |sfx| std.Io.Dir.cwd().deleteFile(std.testing.io, path ++ sfx) catch {};
 
     var run_id_buf: [64]u8 = undefined;
     var req_id_buf: [64]u8 = undefined;
