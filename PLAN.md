@@ -1395,6 +1395,8 @@ It has bounds: depth 64 and 10k nodes visited per validation. Unknown keywords s
 - Write a CHANGELOG with the breaking changes: the gated-agent result union, C ABI v2, the storage migration, and catalog OpenAI models moving to Responses.
 - Tag `v1.1.0`.
 
+**Done (N6, 2026-10-15):** CI green on all targets (3b4ad27); compile time +7% vs v1.0.0 on the same runner; size budgets pass (anthropic-only 657 KB, full 1.59 MB); live runs: OpenAI (structured output, tool loops with reasoning, two-process suspend/resume) and MCP (three public servers) on the release code, Anthropic on dc12eb9 (`anthropic.zig` unchanged since; the shared HTTP client and run loop were exercised live through OpenAI and MCP); CHANGELOG written; tagged `v1.1.0`. Also fixed during N6: a Windows build error (stdio MCP shutdown) and MCP test servers that hung on small CI runners.
+
 ### 17.7 Order, dependencies and risks
 
 Order: N1, then N2, then N3, then N4, then N5.

@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.1.0 (unreleased)
+## v1.1.0 (2026-10-15)
 
 ### Breaking changes
 - **Agents with approval-gated tools** return `union { completed, suspended }` from `generate` instead of failing with `error.ApprovalRequired`; resume with `resumeRun` / `resumeStream` (D31).
