@@ -67,3 +67,7 @@ zig build docs                  # API reference into zig-out/docs
 ```
 
 `PLAN.md` holds the scope, architecture and decisions. `sketch/` is the consumer-facing API.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
