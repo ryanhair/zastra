@@ -977,6 +977,12 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D40 | MCP schema validation | Adds local `$ref`, `allOf`, conditionals and `prefixItems` with depth/size bounds; unsupported schemas skip validation with a warning instead of hiding the tool. (§17.5) |
 | D41 | Suspending a live stream | `s.suspendRun()`, not `s.suspend()`: `suspend` is still a Zig keyword. The C ABI matches with `zastra_stream_suspend`, and adds `<lib>_agent_cancel`; every agent result JSON now has `"status"`. (§17.3) |
 | D42 | Optional MCP servers and URL overrides | `z.mcp.http(..., .{ .optional = true })` starts the App without an unreachable server's tools (logged); `.url_env` replaces the URL when that variable is set. (§17.5) |
+| D43 | Partial output events | Opt-in `.partial_output = true` adds `.output_partial: z.Partial(Output)` (the whole value so far) and `.output_partial_reset` (after a repair). Without the flag, neither is compiled. Partial values are unvalidated. (§18.4) |
+| D44 | Partial output parsing | A byte scanner finds field boundaries; at each one, the buffered prefix is closed and parsed leniently. It isn't a full incremental parser. (§18.4) |
+| D45 | Loops | `z.step.loop(Body, .{ .until, .max, .on_limit })`: do-until over a `T → T` body, with a required comptime `.max`. `.on_limit` defaults to `.fail` (`error.LoopLimit`). (§18.3) |
+| D46 | Loop state and ids | The slot holds `{ iter, value }`. Body slots are cleared each iteration, in the same save that advances `iter`. Saved agent-run ids get `@<iter>`. The default agent thread doesn't, so loops keep their history. Steps after the loop can't need body steps. (§18.3) |
+| D47 | Parallel failure | The first branch failure cancels its siblings. The step reports the earliest real failure in time (v1: first in declaration order, after all finished). Branches no longer share the run's failure state or diagnostic. (§18.1) |
+| D48 | Working-memory migrations | Typed: `pub const migrations = .{ z.migrate(Old, f) }` on the working-memory type, checked as a chain at comptime. A failing migration fails the run. No match still resets, with a better warning. Also applied when restoring saved agent runs. (§18.2) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
@@ -1087,7 +1093,7 @@ It also found two bugs, both fixed:
 
 ## 17. v1.1 plan
 
-v1.1 ships in three releases. **v1.1a** (this section, in detail) fixes what production use needs first. **v1.1b** (developer experience) and **v1.1c** (tooling) keep the §14 lists and are planned in detail when v1.1a lands.
+v1.1 ships in three releases. **v1.1a** (this section, in detail) fixes what production use needs first. **v1.1b** (developer experience) is planned in §18. **v1.1c** (tooling) keeps the §14 list and is planned in detail when v1.1b lands.
 
 | Release | Scope |
 |---|---|
@@ -1412,3 +1418,199 @@ Order: N1, then N2, then N3, then N4, then N5.
 | Breaking changes in a minor release | Pre-1.0-adoption project; each break is a compile error with a `zastra:` message pointing at the fix, never a silent change |
 | `claimRun` semantics on the memory backend | A mutex-guarded compare-and-set; the same tests run against both backends |
 | Prefix rebuild on MCP refresh breaks prompt caching | Sorted tools; refresh only between runs; a trace attribute when a prefix changes |
+
+---
+
+## 18. v1.1b plan (developer experience; release v1.2.0)
+
+v1.1b is the four developer-experience items from §17's table. It changes no wire formats and no storage schema. The one behavior change is in parallel failure (N7). It ships as **v1.2.0**: v1.1a was tagged v1.1.0, and these are new features, so they take a minor version.
+
+| Milestone | Scope | Size |
+|---|---|---|
+| N7 | Early sibling cancellation in `z.step.parallel`, and a fix for its shared-state race | small |
+| N8 | Working-memory migrations | small |
+| N9 | `z.step.loop` | large |
+| N10 | `.output_partial` streaming | large |
+| N11 | Release v1.2.0 | small |
+
+### 18.1 N7: early sibling cancellation (D47)
+
+**Problem.**
+- When one branch of `z.step.parallel` fails, the step still waits for every other branch to finish. A failed lookup waits on a slow agent call that will be thrown away.
+- **v1 race, found while planning this:** a failing branch calls `x.fail`, which writes `failed_step`/`failed_err`/`failed_msg` and allocates from the run's arena. Two branches failing at once race on those fields and on the arena, which isn't thread-safe. Branches also share `x.st.diag`.
+
+**Change.**
+- Branches start with `Group.concurrent`. If concurrency isn't available, they fall back to `Group.async`, which runs a branch inline on small machines. The first branch failure cancels the group (`group.cancel`).
+- Branches observe cancellation at `std.Io` cancellation points: HTTP reads, sleeps (retry backoff) and storage. A canceled branch ends with `error.Canceled`. It is never reported as the step's failure.
+- The step fails with the **earliest** real failure in time, not the first in declaration order. The other branches are recorded as canceled in the trace (`canceled_by = <branch>`).
+- Each branch's failure goes into its own slot: step id, error, message (allocated in the slot's arena) and a diagnostic copy. Only the joining code calls `x.fail`, after `await`. Branches no longer touch `X` or `x.st.diag` directly; the diagnostic becomes per-branch.
+- No opt-out flag. Waiting for every branch to finish has no use once the step's result is already a failure.
+
+**Exit criteria:**
+- With a fast failing branch and a slow branch (a scripted model that sleeps 5 s), the step fails in under 1 s, and the slow branch's span is marked canceled.
+- Two branches failing at the same moment: no data race (run under the thread sanitizer on Linux), and exactly one is reported.
+- Tests pass with the async limit forced to 1 (the inline path), as the MCP tests do.
+- CHANGELOG notes the reporting change (earliest failure instead of declaration order).
+
+### 18.2 N8: working-memory migrations (D48)
+
+**Problem.** Today, when `T` in `.memory.working = T` changes shape, every customer's stored notes reset to the default and a warning is logged. Adding a field to a struct shouldn't throw away what the agent learned.
+
+**API.** Migrations are declared on the working-memory type itself. Unlike committed workflows (D23), `T` is a user type and can carry declarations. They are typed, not hex fingerprints plus JSON:
+
+```zig
+const NotesV1 = struct { name: ?[]const u8 = null, contact: ?[]const u8 = null };
+
+pub const CustomerNotes = struct {
+    name: ?[]const u8 = null,
+    preferred_contact: ?Contact = null,
+    open_issues: []const []const u8 = &.{},
+
+    pub const Contact = enum { email, sms };
+    pub const migrations = .{
+        z.migrate(NotesV1, fromV1),
+    };
+    fn fromV1(arena: std.mem.Allocator, old: NotesV1) !CustomerNotes {
+        _ = arena;
+        const contact = if (old.contact) |c| std.meta.stringToEnum(Contact, c) else null;
+        return .{ .name = old.name, .preferred_contact = contact };
+    }
+};
+```
+
+- `z.migrate(Old, f)` records `fingerprint(Old)` at comptime, plus a wrapper that parses `Old` and calls `f`. `f` is `fn (Allocator, Old) !New`, where `New` is the next version.
+- **Chains:**
+  - The newest type lists every step: `z.migrate(V1, v1ToV2)`, `z.migrate(V2, v2ToV3)`.
+  - Each step's output must be the input of the next step, or `T` for the last one. This is checked at comptime, with a `zastra:` error naming the broken link.
+  - On load, zastra finds the stored fingerprint in the chain and applies every step from there.
+- **Default without a matching migration:** unchanged from v1. The value resets to the default, with a warning that now says "add `z.migrate(<old shape>, ...)` to keep it".
+- **Failed migration:** a migration function that returns an error fails the run with `error.MemoryLoadFailed` and a diagnostic. It does not silently reset: data loss should be loud once the user has asked for a migration.
+- A migrated value is saved back, with the new fingerprint, at the next working-memory save. A read-only run doesn't save. Migrated values are not written eagerly.
+
+**Saved agent runs (N3).** A suspended run's snapshot stores `working_json`, and `run_fingerprint` covers `T`, so changing `T` currently makes old suspended runs fail with `SnapshotIncompatible`. N8 applies the same chain during `restore` before checking the remaining fingerprint. To make that possible, `run_fingerprint` is split into a working-memory part and the rest. Workflow snapshots don't contain working memory, so they're unaffected.
+
+**Exit criteria:**
+- V1 → V2 → V3 chain test on both storage backends; the migrated value is saved with V3's fingerprint.
+- A failing migration surfaces as `MemoryLoadFailed`.
+- A suspended agent run saved under V1 resumes under V3.
+- Compile-fail cases:
+  - a broken chain (an output type that doesn't match the next input)
+  - a migration whose `Old` has the same fingerprint as `T`
+  - a non-function second argument
+  - `migrations` that isn't a tuple
+- Sketch: `CustomerNotes` gains one migration; the support example has a test that loads V1 notes.
+
+### 18.3 N9: `z.step.loop` (D45, D46)
+
+**API.**
+
+```zig
+.then(z.step.loop(Refine, .{ .until = goodEnough, .max = 5 }))
+.then(z.step.loop(Refine, .{ .until = goodEnough, .max = 5, .on_limit = .finish }))
+```
+
+- `Body` is a step or a committed workflow with `Input == Output` (`T → T`). The loop's Input and Output are `T`. Anything else is a compile error that shows both types and suggests wrapping the body in a workflow with an adapter step.
+- `.until: fn (T) bool` is checked after each iteration; the loop is do-until, so the body always runs at least once. Like branch predicates (D24), it must be pure.
+- `.max: comptime_int` is required. An unbounded loop isn't expressible, so every run terminates. A runtime bound is expressed in `.until` (for example, by carrying a counter in `T`).
+- `.on_limit = .fail` (the default) fails the run with `error.LoopLimit` and names the loop. `.finish` returns the last value instead.
+- One iteration counts as one execution of the body, including that body's own retries.
+
+**What a body may contain.** Any step: agents, gated agents, suspendable steps, nested workflows, parallel groups and branches. A loop can't be a branch of `z.step.parallel` (same rule as nested workflows, §6.6). Loops can nest.
+
+**State and resume (D46).**
+- The loop's slot in `W.State` is `{ iter: u32, value: ?T }`: the number of finished iterations and the latest value.
+- The body's own step slots hold only the current iteration's state. They are cleared when an iteration finishes, and that clear goes into the same snapshot save that advances `iter`, so the change is atomic.
+- Replay (D24) runs in two stages. Reaching the loop, the runner uses the stored `value` as the iteration's input and continues at `iter`. Inside the body, finished steps are skipped as usual.
+- A suspend inside iteration k resumes inside iteration k.
+
+**Ids that must differ per iteration.**
+- Step paths are comptime strings today; iterations need a runtime part.
+- The runner keeps an iteration stack for nested loops and appends it to:
+  - saved agent-run ids: `<run>/<path>@<i>#<n>` instead of `<run>/<path>#<n>`. Without this, iteration 2 would resume iteration 1's finished agent run (N4).
+  - the default agent thread `"<run_id>/<step_id>"`: deliberately **not** extended. A looping agent should see its earlier iterations' history, which is what refine loops want. The `thread` option still overrides it.
+  - trace span names: the `iteration` attribute.
+- `suspended_at` stays the comptime path, and the iteration lives in the state. `resumeStep(S, ...)` works unchanged.
+
+**`needs`.**
+- Steps inside the body may need steps that dominate the loop, and steps earlier in the same iteration.
+- Steps after the loop may need the loop, but not steps inside its body: their slots are cleared. That is a compile error naming the loop and suggesting carrying the value in `T`.
+
+**Fingerprint and Mermaid.**
+- The loop and its body are part of the shape. `.max`, `.until` and `.on_limit` are not, so tuning them keeps snapshots valid.
+- Mermaid draws the body as a subgraph with a back edge labeled `until goodEnough (max 5)`.
+
+**Exit criteria:**
+- A refine loop with an agent step that ends by `until`; one that hits `.max` with each `on_limit` value.
+- A gated agent inside the loop: suspend in iteration 2, restart the process, resume. Iteration 1's agent run is not replayed into iteration 2.
+- Crash recovery mid-iteration: a test that kills after a body step's save.
+- A nested loop, and a parallel group inside a loop body.
+- Compile-fail cases:
+  - Input ≠ Output
+  - a missing `.max`
+  - `.max = 0`
+  - a loop inside parallel
+  - `needs` on a body step from after the loop
+  - an `until` with the wrong signature
+- Golden Mermaid for a loop; a fingerprint test showing that `.max` doesn't change it.
+- Sketch and the support example: `DraftReply` becomes a loop over draft → critique with `.max = 3`.
+
+### 18.4 N10: `.output_partial` streaming (D43, D44)
+
+**API.**
+- `z.Agent(Ctx, .{ .output = Triage, .partial_output = true })` adds `.output_partial: z.Partial(Triage)` to the agent's `Event` union.
+- **Opt-in:** without the flag, neither the event arm nor the incremental parser is compiled (§5.6). Asking for it without `.output` is a compile error.
+- Each event carries the whole partial value so far, not a diff. UIs re-render it, and dropping events loses nothing.
+- Events fire when a top-level field's value completes, or when a nested struct's field completes. Arrays grow by completed elements.
+- **Strings:** a field listed in `pub const stream_strings = .{ .summary }` on the output type also fires as its string grows (§5.15). Without that, strings appear only once complete.
+- Enums, numbers and bools appear only once complete, so they're never shown truncated.
+- The final `Result.output` is unchanged: validated, with one repair attempt. Partial values are **unvalidated**, and the docs say so. If a repair happens, the partial stream restarts: a second run of partial events follows a `.output_partial_reset` marker. That marker is the only extra event arm.
+
+**Where the JSON comes from.**
+- **Native structured output:** the text deltas. `.text_delta` still fires with the raw JSON, so existing code doesn't change.
+- **Forced `final_answer` tool:** `tool_call_args` deltas whose `tool_call_start` named `final_answer`. Every provider already emits those deltas: Anthropic `input_json_delta`, Responses `function_call_arguments.delta`, Chat Completions `tool_calls[].function.arguments`.
+
+**Parser (D44).** The parser isn't a full incremental JSON parser.
+- A small byte-level scanner keeps depth, in-string and escape state: O(1) per byte, O(n) per stream. It reports boundaries:
+  - a value ended at depth 1 or 2
+  - a growing string for `stream_strings` fields, throttled to at most one event per 64 bytes or per delta chunk, whichever is larger
+- At a boundary, zastra takes the buffered prefix, closes it (drops the dangling key or token, then closes the open string, arrays and objects) and parses it leniently into `Partial(T)`: missing fields become null, and fields that fail to parse are left null rather than failing the event.
+- Cost: O(boundaries × n). The outputs this is for are a few KB with tens of fields.
+- `z.Partial` gains: arrays of structs become `[]const Partial(Elem)`, and the last element is included only once complete. Today `Partial` recurses into structs only; working memory keeps using it and isn't affected by array elements.
+
+**C ABI and dev CLI.**
+- The stream emits `{"type":"output_partial","value":{...}}` and `{"type":"output_partial_reset"}`.
+- The manifest records `partial_output`.
+- `dev run` re-renders the partial output in place on a TTY and prints only the final value otherwise.
+
+**Exit criteria:**
+- Cassette tests for all three dialects in both modes (native and `final_answer`). Each asserts the sequence of partial values, including a nested struct, an array of structs and a `stream_strings` field.
+- A repair cassette shows the reset.
+- Property test: for every prefix of N recorded outputs, the closed prefix parses (no `ProtocolError`) and each partial value is a field-wise prefix of the final value.
+- Size: the anthropic-only + memory example without `.partial_output` is byte-identical before and after. With it, the cost is recorded in N11.
+- One live run per provider showing partial events from a real stream.
+- Compile-fail cases: `.partial_output` without `.output`; `stream_strings` naming a missing field or a non-string field.
+
+### 18.5 N11: release v1.2.0
+
+- Update `sketch/`, `docs/getting-started.md`, the PLAN sections and the manifest in the same commits as the code (CLAUDE.md).
+- Size budgets unchanged: anthropic-only + memory under 700 KB, the full example under 2 MB. Record the `.partial_output` cost.
+- Compile time within 25% of v1.0.0 on the same CI runner (the N6 check).
+- CI green on all four targets.
+- Live runs: partial output on both providers; a loop with a real agent; a gated agent inside a loop with a two-process resume.
+- CHANGELOG. There's one behavior change: parallel failures report the earliest branch failure. Everything else is additive. Then tag `v1.2.0`.
+
+### 18.6 Order, dependencies and risks
+
+Order: N7, then N8, then N9, then N10.
+- N7 goes first because N9's bodies can contain parallel groups, and the shared-state race should be gone first.
+- N8 is independent and small.
+- N9 and N10 are independent of each other. N10 goes last because it touches every provider's delta path.
+
+| Risk | Mitigation |
+|---|---|
+| `Group.cancel` doesn't interrupt a branch blocked outside `std.Io` (CPU work, a C library) | Document it; the earliest failure is still reported; the branch is awaited, never leaked |
+| Loop iteration ids leak into the comptime-path assumptions all over the runner | Keep paths comptime; the iteration stack is runtime state appended only where ids are minted (agent runs, spans) |
+| Clearing body slots and advancing `iter` must be one save | Done in one state mutation followed by one `x.save`; crash test after each body step |
+| Partial parse cost on large outputs | Boundary-only reparse; a benchmark with a 50 KB output in the N10 tests, with a budget |
+| Providers interleave `final_answer` args with other tool calls | Deltas are keyed by tool index; only the `final_answer` index feeds the scanner |
+| A migration chain grows forever | Old types can be deleted once no stored values use them; the warning names the fingerprint, so it's clear when it's safe |
