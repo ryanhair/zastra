@@ -662,7 +662,7 @@ schema_version(version INTEGER)
 (v1 named the runs table `workflow_runs`, with `workflow_id` and no `kind`; migration 0002 renames it, D32.)
 
 - Migrations are embedded with `@embedFile` and applied in `App.init`.
-- A working-memory fingerprint mismatch (because `T` changed) resets to the default and logs a warning. v1.1 adds migrations.
+- A working-memory fingerprint mismatch (because `T` changed) is migrated through `T.migrations` (`z.migrate(Old, f)`, §18.2); without a matching migration it resets to the default and logs a warning.
 
 ### 6.6 Workflows (`workflow/`)
 
@@ -1494,14 +1494,14 @@ pub const CustomerNotes = struct {
   - Each step's output must be the input of the next step, or `T` for the last one. This is checked at comptime, with a `zastra:` error naming the broken link.
   - On load, zastra finds the stored fingerprint in the chain and applies every step from there.
 - **Default without a matching migration:** unchanged from v1. The value resets to the default, with a warning that now says "add `z.migrate(<old shape>, ...)` to keep it".
-- **Failed migration:** a migration function that returns an error fails the run with `error.MemoryLoadFailed` and a diagnostic. It does not silently reset: data loss should be loud once the user has asked for a migration.
+- **Failed migration:** a migration function that returns an error fails the run with `error.MigrationFailed` and a diagnostic. It does not silently reset: data loss should be loud once the user has asked for a migration.
 - A migrated value is saved back, with the new fingerprint, at the next working-memory save. A read-only run doesn't save. Migrated values are not written eagerly.
 
 **Saved agent runs (N3).** A suspended run's snapshot stores `working_json`, and `run_fingerprint` covers `T`, so changing `T` currently makes old suspended runs fail with `SnapshotIncompatible`. N8 applies the same chain during `restore` before checking the remaining fingerprint. To make that possible, `run_fingerprint` is split into a working-memory part and the rest. Workflow snapshots don't contain working memory, so they're unaffected.
 
 **Exit criteria:**
 - V1 → V2 → V3 chain test on both storage backends; the migrated value is saved with V3's fingerprint.
-- A failing migration surfaces as `MemoryLoadFailed`.
+- A failing migration surfaces as `MigrationFailed`.
 - A suspended agent run saved under V1 resumes under V3.
 - Compile-fail cases:
   - a broken chain (an output type that doesn't match the next input)
@@ -1509,6 +1509,24 @@ pub const CustomerNotes = struct {
   - a non-function second argument
   - `migrations` that isn't a tuple
 - Sketch: `CustomerNotes` gains one migration; the support example has a test that loads V1 notes.
+
+**Implemented (N8, 2026-10-15):**
+- `src/schema/migrate.zig`: `z.migrate(Old, f)` returns a type recording `From`, `To` and `fingerprint.of(Old)`. `check` validates the chain when the agent is declared. `run` parses the stored JSON as the matching `From` and carries the value through the remaining steps, each typed.
+- **Load:** a migrated value marks working memory dirty, so it's saved with the new fingerprint when the run ends. This replaces "read-only runs don't save": migrating once and storing the result is simpler than migrating on every load.
+- **Old JSON that doesn't parse** as the shape it claims is logged and reset, like a current-shape parse failure. Only an error returned by `f` fails the run.
+- **Saved runs:**
+  - Every agent with working memory has `run_core_fingerprint`: the prefix hash with the working-memory tool's schema left out. It's computed for every such agent because the version that saves a run usually has no migrations yet.
+  - Snapshots record it, plus the working-memory fingerprint, as hex.
+  - `resumeRun` accepts a run whose full fingerprint differs when the core matches and the saved working-memory shape is in the chain. `restore` then migrates `working_json`.
+  - v1.1.0 snapshots lack these fields, so they still need an exact match.
+- New error `MigrationFailed` in the agent run error set.
+- Tests (`tests/memory_migration_test.zig`):
+  - V1 → V2 → V3 and V2 → V3 on both backends, each saved back with V3's fingerprint
+  - a failing migration leaves the stored value untouched
+  - an unknown fingerprint resets
+  - a run suspended under V1 (sqlite) resumes under V3 with the migrated value in the request
+- Compile-fail cases: a broken chain, the same shape as `T`, a non-function, migrations that aren't a tuple.
+- The support example and the sketch: `CustomerNotes` migrates from `CustomerNotesV1` (string contact to enum), with an example test.
 
 ### 18.3 N9: `z.step.loop` (D45, D46)
 

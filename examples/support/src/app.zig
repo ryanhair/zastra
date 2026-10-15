@@ -137,7 +137,26 @@ pub const IssueRefund = struct {
 /// the system prompt, and persists it per resource (customer).
 pub const CustomerNotes = struct {
     name: ?[]const u8 = null,
-    preferred_contact: ?enum { email, sms } = null,
+    preferred_contact: ?Contact = null,
+    open_issues: []const []const u8 = &.{},
+
+    pub const Contact = enum { email, sms };
+
+    /// Notes saved before `preferred_contact` became an enum are converted
+    /// when they're loaded, instead of resetting to the defaults. List one
+    /// `z.migrate(OldShape, f)` per earlier version, oldest first.
+    pub const migrations = .{z.migrate(CustomerNotesV1, fromV1)};
+
+    fn fromV1(_: std.mem.Allocator, old: CustomerNotesV1) !CustomerNotes {
+        const contact: ?Contact = if (old.contact) |c| std.meta.stringToEnum(Contact, c) else null;
+        return .{ .name = old.name, .preferred_contact = contact, .open_issues = old.open_issues };
+    }
+};
+
+/// The first version of CustomerNotes, kept for its migration.
+const CustomerNotesV1 = struct {
+    name: ?[]const u8 = null,
+    contact: ?[]const u8 = null,
     open_issues: []const []const u8 = &.{},
 };
 
@@ -395,6 +414,20 @@ test "large refunds pause for approval and resume after a restart" {
     const done = try h.workflow(HandleTicket).resumeStep(z.step.agentOf(Refunder), run_id, .{ .approve = &.{req_id} });
     try std.testing.expect(done.completed.sent);
     try std.testing.expectEqual(1, db.refundCount());
+}
+
+test "notes saved by the first CustomerNotes still load" {
+    var db = OrderDb.fake(&.{});
+    defer db.close();
+    var mailer: notify.Mailer = .{};
+    var ctx: Ctx = .{ .db = &db, .mailer = &mailer };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    const v1 = comptime z.migrate(CustomerNotesV1, CustomerNotes.fromV1).from_fingerprint;
+    try h.rt.state().storage.?.putWorkingMemory("c-42", "support", v1, "{\"name\":\"Ada\",\"contact\":\"sms\"}", 1);
+    h.script(Support, &.{.text("Hi Ada, I'll text you.")});
+    _ = try h.agent(Support).generate("Hi", .{ .resource = "c-42" });
+    try std.testing.expect(std.mem.indexOf(u8, h.requests()[0], "\\\"preferred_contact\\\":\\\"sms\\\"") != null);
 }
 
 test "the HTTP status server's tools show up when it's running" {

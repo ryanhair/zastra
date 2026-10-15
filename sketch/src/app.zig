@@ -134,7 +134,26 @@ pub const IssueRefund = struct {
 /// the system prompt, and persists it per resource (customer).
 pub const CustomerNotes = struct {
     name: ?[]const u8 = null,
-    preferred_contact: ?enum { email, sms } = null,
+    preferred_contact: ?Contact = null,
+    open_issues: []const []const u8 = &.{},
+
+    pub const Contact = enum { email, sms };
+
+    /// Notes saved before `preferred_contact` became an enum are converted
+    /// when they're loaded, instead of resetting to the defaults. List one
+    /// `z.migrate(OldShape, f)` per earlier version, oldest first.
+    pub const migrations = .{z.migrate(CustomerNotesV1, fromV1)};
+
+    fn fromV1(_: std.mem.Allocator, old: CustomerNotesV1) !CustomerNotes {
+        const contact: ?Contact = if (old.contact) |c| std.meta.stringToEnum(Contact, c) else null;
+        return .{ .name = old.name, .preferred_contact = contact, .open_issues = old.open_issues };
+    }
+};
+
+/// The first version of CustomerNotes, kept for its migration.
+const CustomerNotesV1 = struct {
+    name: ?[]const u8 = null,
+    contact: ?[]const u8 = null,
     open_issues: []const []const u8 = &.{},
 };
 

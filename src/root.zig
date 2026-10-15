@@ -36,6 +36,9 @@ pub const App = @import("app.zig").App;
 pub const AgentHandle = @import("app.zig").AgentHandle;
 pub const ToolCtx = @import("context.zig").ToolCtx;
 pub const Partial = @import("schema/partial.zig").Partial;
+/// `z.migrate(Old, f)`: a working-memory migration step, listed in
+/// `pub const migrations = .{ ... }` on the working-memory type (D48).
+pub const migrate = @import("schema/migrate.zig").migrate;
 pub const mcp = struct {
     pub const stdio = @import("mcp/mcp.zig").stdio;
     pub const http = @import("mcp/mcp.zig").http;
@@ -147,6 +150,7 @@ test {
     _ = @import("prompt/template.zig");
     _ = @import("meta/make.zig");
     _ = @import("schema/partial.zig");
+    _ = @import("schema/migrate.zig");
     _ = @import("schema/comptime_json.zig");
     _ = @import("storage/memory_store.zig");
     _ = @import("storage/sqlite.zig");

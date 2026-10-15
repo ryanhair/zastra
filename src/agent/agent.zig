@@ -8,6 +8,7 @@ const errors = @import("../meta/errors.zig");
 const reflect = @import("../meta/reflect.zig");
 const make = @import("../meta/make.zig");
 const fingerprint = @import("../meta/fingerprint.zig");
+const migrate = @import("../schema/migrate.zig");
 const catalog = @import("../catalog/catalog.zig");
 const tool = @import("../tool.zig");
 const json_schema = @import("../schema/json_schema.zig");
@@ -116,6 +117,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
                 for (std.meta.fields(Working_)) |f| if (f.default_value_ptr == null)
                     errors.fail("{s}: working memory field `{s}.{s}` needs a default value (working memory starts empty)", .{ who, reflect.shortTypeName(Working_), f.name });
                 if (!spec.supports.tools) errors.fail("{s}: working memory needs a model with tool use", .{who});
+                migrate.check(Working_, who);
             }
         }
         const has_working = Working_ != void;
@@ -283,6 +285,12 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             /// §17.3): the request prefix, which holds the instructions,
             /// model, settings and every tool definition.
             pub const run_fingerprint: u64 = prefix_.hash;
+            /// The run fingerprint without the working-memory tool's schema, so
+            /// a saved run survives a working-memory change that a later
+            /// version's migrations cover (§18.2). Computed for every agent
+            /// with working memory: the version that saves the run usually has
+            /// no migrations yet.
+            pub const run_core_fingerprint: u64 = if (has_working) coreHash(prefix_.json, json_schema.render(WorkingPatch, tool_dialect)) else prefix_.hash;
             /// Per-tool hashes, so a fingerprint mismatch names the tool.
             pub const tool_prints = tool_prints_;
             pub const tool_defs = defs_final;
@@ -374,5 +382,18 @@ fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime
         if (anthropic and temperature != null and (mode == .on or mode == .budget))
             errors.fail("{s}: `.temperature` can't be combined with reasoning; remove one of them", .{who});
         return .{ .request = request, .show = show };
+    }
+}
+
+/// Hash of `prefix_json` without the working-memory tool's schema.
+fn coreHash(comptime prefix_json: []const u8, comptime schema: []const u8) u64 {
+    comptime {
+        @setEvalBranchQuota(10_000_000);
+        const at = std.mem.indexOf(u8, prefix_json, "\"" ++ working_memory_tool ++ "\"").?;
+        const s = at + std.mem.indexOf(u8, prefix_json[at..], schema).?;
+        var h: std.hash.Wyhash = .init(0);
+        h.update(prefix_json[0..s]);
+        h.update(prefix_json[s + schema.len ..]);
+        return h.final();
     }
 }

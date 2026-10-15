@@ -2,8 +2,12 @@
 
 ## Unreleased (v1.2.0)
 
+### Added
+- **Working-memory migrations:** `pub const migrations = .{ z.migrate(OldNotes, f) }` on the working-memory type converts values saved with older shapes instead of resetting them. Migrations chain, and they also apply when resuming saved agent runs (D48).
+
 ### Changed
 - **`z.step.parallel` failures:** the first failing branch cancels the others instead of waiting for them, and the step reports the earliest failure in time rather than the first in declaration order (D47).
+- The agent run error set gains `MigrationFailed`.
 
 ### Fixed
 - Two parallel branches failing at the same moment raced on the run's failure fields and arena.

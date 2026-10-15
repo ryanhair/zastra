@@ -12,6 +12,8 @@ const runtime = @import("../runtime.zig");
 const parse = @import("../schema/parse.zig");
 const json = @import("../schema/json.zig");
 const partial = @import("../schema/partial.zig");
+const migrate = @import("../schema/migrate.zig");
+const fingerprint = @import("../meta/fingerprint.zig");
 const trace = @import("../trace/trace.zig");
 const ToolCtx = @import("../context.zig").ToolCtx;
 const agent_mod = @import("agent.zig");
@@ -47,6 +49,8 @@ pub const Error = provider.Error || error{
     MissingApiKey,
     /// Stored history or working memory couldn't be read.
     StorageFailed,
+    /// A working-memory migration (`z.migrate`) returned an error (§18.2).
+    MigrationFailed,
     /// An MCP call failed at the transport level.
     McpFailed,
     /// A tool returned an error that isn't in its `ModelErrors`; the run is
@@ -183,6 +187,10 @@ const Snapshot = struct {
     trace_id: []const u8,
     created_at: i64,
     keep_result: bool = false,
+    /// Hex `A.run_core_fingerprint` and the working-memory fingerprint, so a
+    /// run saved before a migrated working-memory change can resume (§18.2).
+    core_hash: ?[]const u8 = null,
+    working_fingerprint: ?[]const u8 = null,
 };
 
 const SavedCall = struct {
@@ -428,6 +436,8 @@ pub fn Stream(comptime A: type) type {
                 .repair_used = s.repair_used,
                 .working_json = if (A.has_working_memory) try json.stringifyAlloc(s.arena, s.working) else null,
                 .working_dirty = s.working_dirty,
+                .core_hash = try std.fmt.allocPrint(s.arena, "{x:0>16}", .{A.run_core_fingerprint}),
+                .working_fingerprint = if (A.has_working_memory) try std.fmt.allocPrint(s.arena, "{x:0>16}", .{A.working_fingerprint}) else null,
                 .thread = s.opts.thread,
                 .resource = s.opts.resource,
                 .trace_id = try std.fmt.allocPrint(s.arena, "{x}", .{s.trace_id[0..]}),
@@ -462,8 +472,13 @@ pub fn Stream(comptime A: type) type {
             s.working_dirty = snap.working_dirty;
             if (A.has_working_memory) {
                 if (snap.working_json) |wj| {
-                    var issue: parse.Issue = .{};
-                    s.working = parse.parse(A.Working, arena, wj, &issue) catch return error.CorruptSnapshot;
+                    const fp = if (snap.working_fingerprint) |h| std.fmt.parseInt(u64, h, 16) catch return error.CorruptSnapshot else A.working_fingerprint;
+                    if (fp == A.working_fingerprint) {
+                        var issue: parse.Issue = .{};
+                        s.working = parse.parse(A.Working, arena, wj, &issue) catch return error.CorruptSnapshot;
+                    } else {
+                        s.working = (try s.migrateWorking(snap.resource orelse "", fp, wj)) orelse return error.CorruptSnapshot;
+                    }
                 }
                 s.system_suffix = try s.workingSuffix();
             }
@@ -485,6 +500,26 @@ pub fn Stream(comptime A: type) type {
             s.step_open = true;
             s.phase = .awaiting_approval;
             return s;
+        }
+
+        /// Migrate a working-memory value saved with fingerprint `fp` (§18.2).
+        /// Null when no migration covers it, or the old value doesn't parse
+        /// as the shape it was saved under (logged).
+        fn migrateWorking(s: *Self, res: []const u8, fp: u64, value_json: []const u8) Error!?A.Working {
+            if (comptime !A.has_working_memory) return null;
+            var issue: parse.Issue = .{};
+            var failed: anyerror = error.Unknown;
+            return migrate.run(A.Working, s.arena, fp, value_json, &issue, &failed) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.ValidationFailed => {
+                    std.log.warn("zastra: agent '{s}': working memory for '{s}' didn't parse as the shape it was saved under ({f}); starting from defaults", .{ A.id, res, issue });
+                    return null;
+                },
+                error.MigrationFailed => {
+                    s.diag.print(0, "agent '{s}': migrating working memory for '{s}' from 0x{x:0>16}: {t}", .{ A.id, res, fp, failed });
+                    return error.MigrationFailed;
+                },
+            };
         }
 
         fn workingSuffix(s: *Self) Allocator.Error![]const u8 {
@@ -686,7 +721,13 @@ pub fn Stream(comptime A: type) type {
                     };
                     if (wm) |w| {
                         if (w.fingerprint != A.working_fingerprint) {
-                            std.log.warn("zastra: agent '{s}': working memory for '{s}' was saved with a different {s} shape; starting from defaults", .{ A.id, res, @typeName(A.Working) });
+                            if (try s.migrateWorking(res, w.fingerprint, w.value_json)) |v| {
+                                s.working = v;
+                                // Saved back, with the new fingerprint, when the run ends.
+                                s.working_dirty = true;
+                            } else {
+                                std.log.warn("zastra: agent '{s}': working memory for '{s}' was saved with a different {s} shape (fingerprint 0x{x:0>16}); starting from defaults. Add `z.migrate(<old shape>, ...)` to {s}.migrations to keep it", .{ A.id, res, @typeName(A.Working), w.fingerprint, @typeName(A.Working) });
+                            }
                         } else {
                             var issue: parse.Issue = .{};
                             s.working = parse.parse(A.Working, s.arena, w.value_json, &issue) catch blk: {
@@ -1153,7 +1194,7 @@ fn reopen(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []cons
             return error.CorruptSnapshot;
         },
     };
-    if (rec.fingerprint != A.run_fingerprint) {
+    if (rec.fingerprint != A.run_fingerprint and !migratable(A, snap)) {
         st.diagPrint("agent '{s}' run '{s}' was saved by a different version of the agent: {f}. Deny its approvals and start a new run", .{ A.id, run_id, Changes(A){ .saved = snap.tools } });
         return error.SnapshotIncompatible;
     }
@@ -1180,6 +1221,18 @@ fn reopen(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []cons
     }
     for (decisions) |d| try s.respond(d.id, d.decision);
     return s;
+}
+
+/// A run saved before a working-memory change that `z.migrate` covers: the
+/// rest of the agent is unchanged, and the saved shape is in the chain.
+fn migratable(comptime A: type, snap: Snapshot) bool {
+    if (comptime !(A.has_working_memory and migrate.has(A.Working))) return false;
+    const core = std.fmt.parseInt(u64, snap.core_hash orelse return false, 16) catch return false;
+    if (core != A.run_core_fingerprint) return false;
+    const fp = std.fmt.parseInt(u64, snap.working_fingerprint orelse return false, 16) catch return false;
+    if (fp == A.working_fingerprint) return true;
+    inline for (A.Working.migrations) |M| if (M.from_fingerprint == fp) return true;
+    return false;
 }
 
 /// What changed between a saved run's agent and the current one.
