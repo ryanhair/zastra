@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (v1.2.0)
+## v1.2.0 (2026-10-16)
 
 ### Added
 - **Partial structured output:** `.partial_output = true` on an agent with `.output` adds `.output_partial` events (the value so far as `z.Partial(T)`) and `.output_partial_reset`. Fields listed in `pub const stream_strings` stream as they grow. C ABI event kinds 7 and 8 (D43, D44).

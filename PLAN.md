@@ -1682,6 +1682,12 @@ pub const CustomerNotes = struct {
 - Live runs: partial output on both providers; a loop with a real agent; a gated agent inside a loop with a two-process resume.
 - CHANGELOG. There's one behavior change: parallel failures report the earliest branch failure. Everything else is additive. Then tag `v1.2.0`.
 
+**Done (N11, 2026-10-16):** CI green on all targets (ceaf826, after GitHub billing blocked the N9 run; the repo is now public under MIT); compile time 31 s vs v1.0.0's 29 s on the same runner (+7%); size budgets pass (anthropic-only + memory 656,904 B, full 1,596,808 B, +2.8 KB with `.partial_output`). Live runs on the release code:
+- Partial output on six paths: native structured output and the `final_answer` tool on Anthropic (claude-sonnet-5-5, claude-haiku-5-5), OpenAI Responses and Chat Completions (gpt-5.4-mini). Each streamed 15–21 partial values with `summary` growing in 9–16 steps (586–1,073 chars); the last partial equaled the final output; no resets. First partial after 0.8–3.4 s.
+- A loop around a real agent (gpt-5.4-mini) ran three iterations and stopped on `until`.
+- A gated agent in a loop (claude-sonnet-5-5), three processes: process 1 suspended in iteration 0; process 2 approved, the tool ran once, and iteration 1 suspended; process 3 approved and the run completed. Saved runs `<run>/loop_gated_reviser.gated_reviser@0#0` and `@1#0` both `completed`; a repeated resume got `NotSuspendedAtStep`.
+- Note for users: Chat Completions on api.openai.com rejects `max_tokens` for current models; `z.custom` there needs `.max_tokens_field = .max_completion_tokens` (catalog models use Responses and set it already).
+
 ### 18.6 Order, dependencies and risks
 
 Order: N7, then N8, then N9, then N10.
