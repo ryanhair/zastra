@@ -983,7 +983,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D46 | Loop state and ids | The slot holds `{ iter, value }`. Body slots are cleared each iteration, in the same save that advances `iter`. Saved agent-run ids get `@<iter>`. The default agent thread doesn't, so loops keep their history. Steps after the loop can't need body steps. (§18.3) |
 | D47 | Parallel failure | The first branch failure cancels its siblings. The step reports the earliest real failure in time (v1: first in declaration order, after all finished). Branches no longer share the run's failure state or diagnostic. (§18.1) |
 | D48 | Working-memory migrations | Typed: `pub const migrations = .{ z.migrate(Old, f) }` on the working-memory type, checked as a chain at comptime. A failing migration fails the run. No match still resets, with a better warning. Also applied when restoring saved agent runs. (§18.2) |
-| D49 | OTLP exporter | OTLP/HTTP with JSON encoding, no protobuf or gRPC. Referenced through a vtable from `z.trace.otlp` only, so other Apps link none of it. Bounded queue and a background sender; export failures never fail runs. 64-bit trace ids left-padded to 128 bits (widening is v2). GenAI semantic-convention attribute names. (§19.1) |
+| D49 | OTLP exporter | OTLP/HTTP with JSON encoding, no protobuf or gRPC. Referenced through a vtable from `z.trace.otlp` only, so other Apps link none of it. Bounded queue and a background sender; export failures never fail runs. Trace ids widen to 128 bits everywhere, with no compatibility path (no outside users yet). GenAI semantic-convention attribute names. (§19.1) |
 | D50 | `dev serve` | A library function (`z.dev.serve`) behind the dev CLI. SSE events use the C ABI's event JSON. Approvals suspend the run and close the stream; clients resume over a new request. Loopback by default, `Host`/`Origin` checks, a bearer token required off loopback. (§19.2) |
 | D51 | `z.testing.arbitrary(T)` | Values valid by construction for `schema.parse`, edge-biased, from `std.Random` or `std.testing.Smith`. `pattern` isn't generated (D27); a type can override with `pub fn arbitrary`. (§19.3) |
 | D52 | `z.testing.fuzzTool` | Valid and hostile inputs along the model's tool-call path. Effectful tools need `.allow_effects` at compile time. Failures print a reproducing seed. (§19.4) |
@@ -1712,7 +1712,7 @@ Order: N7, then N8, then N9, then N10.
 
 ## 19. v1.1c plan (tooling; release v1.3.0)
 
-v1.1c is the tooling row of §17's table. It's additive: no wire format, storage schema or public type changes, so it ships as **v1.3.0**. None of it adds code to an App binary that doesn't use it.
+v1.1c is the tooling row of §17's table. It ships as **v1.3.0**. One public type changes: trace ids widen to 128 bits (N12). zastra has no outside users yet, so this is done without a compatibility path (D49). Nothing else changes a wire format or storage schema, and none of it adds code to an App binary that doesn't use it.
 
 | Milestone | Scope | Size |
 |---|---|---|
@@ -1745,13 +1745,14 @@ v1.1c is the tooling row of §17's table. It's additive: no wire format, storage
 - **Batching:** `Span.end` copies the finished span into a bounded queue (2,048 spans) under the tracer's mutex. A background task started with `Io.Group.concurrent` (inline fallback: flush on the ending thread once the batch is full) sends a batch every 512 spans or 2 s. `rt.deinit()` cancels the task and flushes what's left, with a 5 s limit. When the queue is full, the oldest spans are dropped and counted; the count goes out as a log warning, not an error.
 - **Failures never fail a run.** The exporter retries 429/5xx and connection errors twice with backoff (the provider HTTP client's policy), then drops the batch and logs one warning per minute at most.
 - **HTTP:** the runtime's existing client (TLS, CA bundle, timeouts). Nothing new is linked for `https` endpoints.
-- **Ids:** zastra's trace ids are 64-bit (`[16]u8` hex in `GenerateOptions.trace_id`, a public type). OTLP needs 128-bit trace ids, so the exporter left-pads with zeros. That's valid OTLP (an id is invalid only when all zero). Widening the public type is a breaking change and waits for v2. Span ids are already 64-bit.
+- **Ids:** trace ids widen from 64 to 128 bits everywhere: `[32]u8` hex in `GenerateOptions.trace_id` and the span types, the JSONL `trace_id` field, and agent-run snapshots. OTLP and W3C `traceparent` both use 128-bit trace ids, so ids pass through unchanged. Span ids stay 64-bit, as in OTLP. No compatibility path: old 16-character trace ids in JSONL files and snapshots aren't read. `dev trace` reports them as an old format.
 - **Attributes:** the OpenTelemetry GenAI semantic conventions where one exists (`gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.tool.name`, `gen_ai.agent.name`). Everything else stays under `zastra.*` (`zastra.cost_usd`, `zastra.prefix_hash`, `zastra.iteration`). JSONL keeps today's keys. `model_call` and `mcp_call` spans are `SPAN_KIND_CLIENT`; the rest are `INTERNAL`. Failed spans get `STATUS_CODE_ERROR` and the message.
 - **Content:** with `.include_content`, prompts and responses go into `gen_ai.input.messages` and `gen_ai.output.messages` as JSON strings. They're off by default, as in JSONL.
 
 **Exit criteria:**
 - A fake collector in the tests (like `tests/fake_mcp_http.zig`): the exact JSON body for one agent run with a tool call (golden), batching by count and by time, the flush at `rt.deinit()`, a full queue dropping the oldest spans, a 503 retried and then dropped without failing the run, and environment-variable defaults.
-- Size: the size suite's anthropic-only App is byte-identical with `.jsonl`; record the cost of `.otlp`.
+- Size: with `.jsonl`, the size suite's anthropic-only App changes only by the wider trace id; record the cost of `.otlp`.
+- Trace ids: a test that every span of a run, the JSONL line and the agent-run snapshot carry the same 32-character id.
 - Live: the support example exporting to a local Jaeger (`jaegertracing/all-in-one`, OTLP on 4318). The span tree, GenAI attributes and errors show up in the UI.
 - Docs: a tracing section in `docs/getting-started.md`; the sketch's `.tracing` comment becomes real code.
 
@@ -1852,7 +1853,7 @@ test "lookup_order survives arbitrary input" {
 - Compile time within 25% of v1.0.0 on the same CI runner.
 - CI green on all four targets.
 - Live: OTLP into Jaeger; `dev serve` with a streamed approval and resume on both providers.
-- CHANGELOG, then tag `v1.3.0`.
+- CHANGELOG, with the trace-id widening under breaking changes, then tag `v1.3.0`.
 
 ### 19.6 Order, dependencies and risks
 
