@@ -78,7 +78,7 @@ pub const App = z.App(.{
 });
 ```
 
-`.name` is required: zastra can't see the name of the declaration that holds a type returned by a function. Model strings are checked against the catalog at compile time. For a model the catalog doesn't know, use `z.custom(.{ .provider = .openai_compat, .id = "...", .base_url = "...", .api_key_env = "...", .supports = .{ ... } })`. `.provider` is `.anthropic`, `.openai_responses` (OpenAI's Responses API) or `.openai_compat` (Chat Completions servers).
+`.name` is required: zastra can't see the name of the declaration that holds a type returned by a function. Model strings are checked against the catalog at compile time. For a model the catalog doesn't know, use `z.custom(.{ .provider = .openai_compat, .id = "...", .base_url = "...", .api_key_env = "...", .supports = .{ ... } })`. `.provider` is `.anthropic`, `.openai_responses` (OpenAI's Responses API) or `.openai_compat` (Chat Completions servers). Servers differ in the name of the output limit: `.max_tokens_field` is `.max_tokens` by default, and Chat Completions on api.openai.com needs `.max_completion_tokens` (it rejects `max_tokens` for current models).
 
 ## 4. Run it
 

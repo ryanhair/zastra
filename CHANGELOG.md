@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- A test for a crash between a loop body's last save and the loop's progress save.
+- `docs/getting-started.md`: `.max_tokens_field = .max_completion_tokens` for `z.custom` models on OpenAI's Chat Completions endpoint.
+
 ## v1.2.0 (2026-10-16)
 
 ### Added

@@ -109,7 +109,7 @@ fn atLeastSix(d: Draft) bool {
     return d.score >= 6;
 }
 
-const App = z.App(.{ .ctx = Ctx, .agents = .{ Critic, Editor }, .workflows = .{ Simple, Limited, Finished, AgentLoop, GatedLoop, Outer }, .storage = .sqlite });
+const App = z.App(.{ .ctx = Ctx, .agents = .{ Critic, Editor }, .workflows = .{ Simple, Limited, Finished, AgentLoop, GatedLoop, Outer, CrashLoop }, .storage = .sqlite });
 
 const start: Draft = .{ .text = "d", .score = 0 };
 
@@ -234,4 +234,51 @@ test "mermaid and fingerprint" {
     try t.expectEqual(Simple.fingerprint_value, Other.fingerprint_value);
     const Different = z.Workflow(Ctx, "simple", Draft).then(Bump).commit();
     try t.expect(Simple.fingerprint_value != Different.fingerprint_value);
+}
+
+// ── a crash between the body's last save and the loop's progress save ───────
+
+const Hold = struct {
+    pub const Input = Draft;
+    pub const Output = Draft;
+    pub const Suspend = struct { score: u32 };
+    pub const Resume = struct { ok: bool };
+    pub fn run(w: *z.StepCtx(Ctx, @This()), in: Input) !z.Suspendable(@This()) {
+        if (w.resumed == null) return .{ .suspended = .{ .score = in.score } };
+        return .{ .done = in };
+    }
+};
+const HoldBody = z.Workflow(Ctx, "hold_body", Draft).then(Bump).then(Hold).commit();
+fn atLeastTwo(d: Draft) bool {
+    return d.score >= 2;
+}
+const CrashLoop = z.Workflow(Ctx, "crash_loop", Draft).then(z.step.loop(HoldBody, .{ .until = atLeastTwo, .max = 5 })).commit();
+
+test "a crash after the body's last save neither repeats the body nor runs an extra iteration" {
+    var db: Db = .{};
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    const a = h.arena.allocator();
+    const store = h.rt.state().storage.?;
+    // Iteration 0 bumps to score 1 and suspends at Hold.
+    const paused = try z.testing.expectSuspended(try h.workflow(CrashLoop).start(start), .hold);
+    try t.expectEqual(@as(u32, 1), db.bumps.load(.monotonic));
+    // Rewrite the snapshot to what a crash right after Hold's save leaves:
+    // every body step done, the loop's progress not yet advanced.
+    var rec = (try store.loadRun(a, paused.run_id)).?;
+    const bump_slot = "\"loop_hold_body.hold_body.bump\":{\"value\":{\"text\":\"d+\",\"score\":1}}";
+    try t.expect(std.mem.indexOf(u8, rec.state_json, bump_slot) != null);
+    rec.state_json = try std.mem.replaceOwned(u8, a, rec.state_json, bump_slot, bump_slot ++ ",\"loop_hold_body.hold_body.hold\":{\"value\":{\"text\":\"d+\",\"score\":1}}");
+    try store.saveRun(rec);
+    // The replay takes iteration 0 from the snapshot, then iteration 1 runs
+    // once: one more bump, not two, and the loop ends on `until`.
+    const r = try h.workflow(CrashLoop).resumeStep(Hold, paused.run_id, .{ .ok = true });
+    const r2 = switch (r) {
+        .suspended => |s| try h.workflow(CrashLoop).resumeStep(Hold, s.run_id, .{ .ok = true }),
+        else => r,
+    };
+    try t.expectEqual(@as(u32, 2), r2.completed.score);
+    try t.expectEqualStrings("d++", r2.completed.text);
+    try t.expectEqual(@as(u32, 2), db.bumps.load(.monotonic));
 }

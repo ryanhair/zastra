@@ -1602,7 +1602,7 @@ pub const CustomerNotes = struct {
   - a gated agent that finishes in iteration 1 and suspends in iteration 2, then resumes after a restart; a mutation check confirms iteration 1's run isn't reused without the `@i` suffix
   - a workflow body with a nested loop, a parallel group and a suspend mid-iteration, where steps before the suspend point don't re-run
   - Mermaid and fingerprint stability under changes to `.max`, `.until` and `.on_limit`
-  - Crash recovery between the two saves is covered by the top-of-loop check rather than by a kill test.
+  - Crash recovery between the two saves: zastra has no API that recovers a crashed `running` run (resuming one reports `RunBusy`), so there is no process to kill and restart. The test (v1.2.1) instead rewrites a suspended snapshot into the state such a crash leaves (every body step saved, progress not advanced) and resumes it: the replayed iteration's steps don't re-run, and the loop runs exactly one more iteration.
 - Compile-fail cases: Input ≠ Output, a missing `.max`, `.max = 0`, a wrong `until` signature, a loop inside parallel, `needs` on a body step from after the loop.
 - **The support example and the sketch:**
   - `DraftReply` now produces a `Draft`.
