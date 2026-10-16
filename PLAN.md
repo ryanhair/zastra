@@ -983,6 +983,10 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D46 | Loop state and ids | The slot holds `{ iter, value }`. Body slots are cleared each iteration, in the same save that advances `iter`. Saved agent-run ids get `@<iter>`. The default agent thread doesn't, so loops keep their history. Steps after the loop can't need body steps. (§18.3) |
 | D47 | Parallel failure | The first branch failure cancels its siblings. The step reports the earliest real failure in time (v1: first in declaration order, after all finished). Branches no longer share the run's failure state or diagnostic. (§18.1) |
 | D48 | Working-memory migrations | Typed: `pub const migrations = .{ z.migrate(Old, f) }` on the working-memory type, checked as a chain at comptime. A failing migration fails the run. No match still resets, with a better warning. Also applied when restoring saved agent runs. (§18.2) |
+| D49 | OTLP exporter | OTLP/HTTP with JSON encoding, no protobuf or gRPC. Referenced through a vtable from `z.trace.otlp` only, so other Apps link none of it. Bounded queue and a background sender; export failures never fail runs. 64-bit trace ids left-padded to 128 bits (widening is v2). GenAI semantic-convention attribute names. (§19.1) |
+| D50 | `dev serve` | A library function (`z.dev.serve`) behind the dev CLI. SSE events use the C ABI's event JSON. Approvals suspend the run and close the stream; clients resume over a new request. Loopback by default, `Host`/`Origin` checks, a bearer token required off loopback. (§19.2) |
+| D51 | `z.testing.arbitrary(T)` | Values valid by construction for `schema.parse`, edge-biased, from `std.Random` or `std.testing.Smith`. `pattern` isn't generated (D27); a type can override with `pub fn arbitrary`. (§19.3) |
+| D52 | `z.testing.fuzzTool` | Valid and hostile inputs along the model's tool-call path. Effectful tools need `.allow_effects` at compile time. Failures print a reproducing seed. (§19.4) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
@@ -1019,7 +1023,7 @@ Tracing and tooling
 
 From the live test
 - first-class reasoning control on agents (done in N1, §17.1). It used to be reachable only through `provider_options`. On 5.x models thinking is on by default with `display: "omitted"`, so `.reasoning_delta` never fired without `display: "summarized"`.
-- `models-update` reads Anthropic capabilities from `GET /v1/models` when a key is available, instead of hand-copied flags
+- `models-update` reads Anthropic capabilities from `GET /v1/models` when a key is available, instead of hand-copied flags (done in N1, §17.1)
 
 Candidates, not committed
 - client-side `pattern` enforcement; needs a small regex engine (D27)
@@ -1093,7 +1097,7 @@ It also found two bugs, both fixed:
 
 ## 17. v1.1 plan
 
-v1.1 ships in three releases. **v1.1a** (this section, in detail) fixes what production use needs first. **v1.1b** (developer experience) is planned in §18. **v1.1c** (tooling) keeps the §14 list and is planned in detail when v1.1b lands.
+v1.1 ships in three releases. **v1.1a** (this section, in detail) fixes what production use needs first. **v1.1b** (developer experience) is planned in §18. **v1.1c** (tooling) is planned in §19.
 
 | Release | Scope |
 |---|---|
@@ -1703,3 +1707,166 @@ Order: N7, then N8, then N9, then N10.
 | Partial parse cost on large outputs | Boundary-only reparse; a benchmark with a 50 KB output in the N10 tests, with a budget |
 | Providers interleave `final_answer` args with other tool calls | Deltas are keyed by tool index; only the `final_answer` index feeds the scanner |
 | A migration chain grows forever | Old types can be deleted once no stored values use them; the warning names the fingerprint, so it's clear when it's safe |
+
+---
+
+## 19. v1.1c plan (tooling; release v1.3.0)
+
+v1.1c is the tooling row of §17's table. It's additive: no wire format, storage schema or public type changes, so it ships as **v1.3.0**. None of it adds code to an App binary that doesn't use it.
+
+| Milestone | Scope | Size |
+|---|---|---|
+| N12 | OTLP trace exporter | medium |
+| N13 | `dev serve`: the dev CLI over HTTP + SSE | large |
+| N14 | `z.testing.arbitrary(T)` | medium |
+| N15 | `z.testing.fuzzTool` | small |
+| N16 | Release v1.3.0 | small |
+
+`models-update` reading `GET /v1/models` (listed in §14) shipped in N1 (§17.1), so it isn't here.
+
+### 19.1 N12: OTLP exporter (D49)
+
+**Problem.** Spans only go to a JSONL file. Production users want them in the collector they already run (OpenTelemetry Collector, Jaeger, Honeycomb, Grafana Tempo, Langfuse, Phoenix).
+
+**API.**
+
+```zig
+.tracing = z.trace.otlp(.{
+    .endpoint = "http://localhost:4318",      // default: OTEL_EXPORTER_OTLP_ENDPOINT, then this
+    .headers = &.{.{ "x-honeycomb-team", .{ .env = "HONEYCOMB_API_KEY" } }}, // default: OTEL_EXPORTER_OTLP_HEADERS
+    .service_name = "support",                // default: OTEL_SERVICE_NAME, then the App's name
+    .include_content = false,
+}),
+```
+
+**Design:**
+- **Protocol:** OTLP/HTTP with the JSON encoding, `POST <endpoint>/v1/traces` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` used as is). Every collector named above accepts it. No protobuf or gRPC: that would mean a protobuf encoder for one message type, and HTTP/JSON is a required part of the spec.
+- **Size follows usage:** `trace.Config` gains an `.exporter` variant holding a pointer to a vtable (`push`, `flush`, `deinit`). `z.trace.otlp` is the only thing that references the OTLP code, so Apps that use `.jsonl` or `.off` link none of it. JSONL stays an inline variant, unchanged.
+- **Batching:** `Span.end` copies the finished span into a bounded queue (2,048 spans) under the tracer's mutex. A background task started with `Io.Group.concurrent` (inline fallback: flush on the ending thread once the batch is full) sends a batch every 512 spans or 2 s. `rt.deinit()` cancels the task and flushes what's left, with a 5 s limit. When the queue is full, the oldest spans are dropped and counted; the count goes out as a log warning, not an error.
+- **Failures never fail a run.** The exporter retries 429/5xx and connection errors twice with backoff (the provider HTTP client's policy), then drops the batch and logs one warning per minute at most.
+- **HTTP:** the runtime's existing client (TLS, CA bundle, timeouts). Nothing new is linked for `https` endpoints.
+- **Ids:** zastra's trace ids are 64-bit (`[16]u8` hex in `GenerateOptions.trace_id`, a public type). OTLP needs 128-bit trace ids, so the exporter left-pads with zeros. That's valid OTLP (an id is invalid only when all zero). Widening the public type is a breaking change and waits for v2. Span ids are already 64-bit.
+- **Attributes:** the OpenTelemetry GenAI semantic conventions where one exists (`gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.tool.name`, `gen_ai.agent.name`). Everything else stays under `zastra.*` (`zastra.cost_usd`, `zastra.prefix_hash`, `zastra.iteration`). JSONL keeps today's keys. `model_call` and `mcp_call` spans are `SPAN_KIND_CLIENT`; the rest are `INTERNAL`. Failed spans get `STATUS_CODE_ERROR` and the message.
+- **Content:** with `.include_content`, prompts and responses go into `gen_ai.input.messages` and `gen_ai.output.messages` as JSON strings. They're off by default, as in JSONL.
+
+**Exit criteria:**
+- A fake collector in the tests (like `tests/fake_mcp_http.zig`): the exact JSON body for one agent run with a tool call (golden), batching by count and by time, the flush at `rt.deinit()`, a full queue dropping the oldest spans, a 503 retried and then dropped without failing the run, and environment-variable defaults.
+- Size: the size suite's anthropic-only App is byte-identical with `.jsonl`; record the cost of `.otlp`.
+- Live: the support example exporting to a local Jaeger (`jaegertracing/all-in-one`, OTLP on 4318). The span tree, GenAI attributes and errors show up in the UI.
+- Docs: a tracing section in `docs/getting-started.md`; the sketch's `.tracing` comment becomes real code.
+
+### 19.2 N13: `dev serve` (D50)
+
+**Problem.** The dev CLI is one process per command. A web UI (the v2 Studio) and scripts in other languages need the same commands over HTTP, with streaming.
+
+**API.** `zig build dev -- serve [--port 4111] [--host 127.0.0.1] [--token-env NAME] [--trace-file zastra-trace.jsonl]`. The server is a library function, `z.dev.serve(App, *Runtime, opts)`, which the dev binary calls. That makes it testable against a harness runtime with scripted models.
+
+**Endpoints** (JSON in and out; streaming responses are `text/event-stream`):
+
+| Method and path | Same as |
+|---|---|
+| `GET /api/agents`, `GET /api/agents/{id}` (tools, schemas, effects, prefix hash) | `agents`, `schema`, `prefix` |
+| `POST /api/agents/{id}/generate` `{input, thread?, resource?}` | one-shot `chat` |
+| `POST /api/agents/{id}/stream` | `chat`, streamed |
+| `GET /api/workflows`, `GET /api/workflows/{id}/graph` | `graph` |
+| `POST /api/workflows/{id}/start` `{input, resource?}` | `run` |
+| `GET /api/runs?kind=&status=`, `GET /api/runs/{id}` | `runs` |
+| `POST /api/runs/{id}/resume` `{decisions}` or `{step, value}`; `.../resume/stream` for agent runs | `resume` |
+| `POST /api/runs/{id}/cancel` | |
+| `GET /api/traces/{trace_or_run_id}` | `trace` |
+| `GET /api/models` | `models` |
+
+**Design:**
+- **One event encoding.** SSE events are the C ABI's event JSON (`event: <kind>`, `data: <the C ABI's JSON>`), so a client written against one works against the other. The manifest (§5.16) describes both.
+- **Approvals over SSE.** SSE is one-way. When a stream reaches an approval request, the server suspends the run (`s.suspendRun()`), sends `approval_request` events and a final `suspended` event with the run id, and closes the stream. The client continues it with `POST /api/runs/{id}/resume/stream`. This is the D31 flow over HTTP; the server keeps no session state.
+- **Concurrency.** Each connection runs on its own task (`Io.Group.concurrent`). The runtime is already safe for concurrent runs. A client disconnecting cancels its run's task. The run's saved state follows the usual rules: a stream canceled mid-step isn't resumable unless it was suspended.
+- **Security.** The server can spend money on your API keys, so:
+  - It binds to `127.0.0.1` by default.
+  - A non-loopback `--host` requires `--token-env`; requests must then send `Authorization: Bearer <token>`.
+  - Every request's `Host` must be a loopback name or the bound host, and a request with an `Origin` header must come from a loopback origin. This blocks DNS rebinding and cross-site requests from a browser.
+  - No CORS headers by default. `--allow-origin <url>` adds one exact origin, for a local UI on another port.
+  - Request bodies are capped at 1 MiB.
+- **Errors.** `{"error": {"code": "<zastra error name>", "message": "<diagnostic>"}}` with 400 (bad input), 404, 409 (`RunBusy`, `NotSuspended`) or 502 (provider errors).
+- **No OpenAPI spec yet** (§14 lists it for v2). `docs/dev-serve.md` documents the endpoints, and a golden test pins every response shape.
+
+**Exit criteria:**
+- Tests against a harness runtime, using a real socket and `std.http.Client`: every endpoint, an SSE stream with tool and partial-output events, a suspend over SSE followed by resume/stream, a concurrent second request, a client disconnecting mid-stream, and each security rule (wrong `Host`, a foreign `Origin`, a missing token, an oversized body).
+- `dev serve` on the support example, driven by `curl` in CI (`tests/dev_serve_smoke.sh`), with fake keys covering the error paths.
+- Live: the support example, `curl -N` streaming a chat with an approval, then resuming it.
+- App binaries don't change size; `dev serve` lives only in the dev binary.
+
+### 19.3 N14: `z.testing.arbitrary(T)` (D51)
+
+**Problem.** Tests hand-write tool inputs and outputs. Edge cases (empty strings, boundary numbers, unicode, missing optionals) are only tested if someone thinks of them.
+
+**API.**
+
+```zig
+var prng: std.Random.DefaultPrng = .init(seed);
+const order = try z.testing.arbitrary(LookupOrder.Input, arena, prng.random());
+// or, inside std.testing.fuzz, a coverage-guided source:
+const order = try z.testing.arbitrary(LookupOrder.Input, arena, smith);
+```
+
+**Design:**
+- **Sources.** `std.Random` (seeded, deterministic, runs in a normal `zig build test`) or `*std.testing.Smith` (coverage-guided under `zig build test --fuzz`). One generator is written against a small internal interface both satisfy.
+- **Valid by construction.** Every value is one that `schema.parse(T, ...)` accepts: integer bit widths, `min`/`max`, `min_len`/`max_len`, `one_of`, `min_items`/`max_items`, every enum tag and union variant, optionals sometimes null, defaulted fields sometimes omitted. `z.Json` gets small random JSON.
+- **`pattern` isn't generated.** zastra doesn't enforce `pattern` (D27), and generating strings from a regex needs the engine D27 deferred. A field with a `pattern` gets strings within its length bounds. A type can override generation with `pub fn arbitrary(gen: *z.testing.Gen) !T`, also used for values the schema can't express.
+- **Edge bias.** About a quarter of picks are boundaries: `min`, `max`, 0, the empty string, maximum-length strings, quotes and backslashes, control characters, multi-byte and invalid-looking (but valid) UTF-8, empty and maximum-length arrays.
+- **Bounds.** Default `max_len` 64 and `max_items` 8 where the schema has none, overridable with `.{ .max_len, .max_items }`. Recursive types are already rejected by §5.1.
+- **Round-trip check, used on zastra's own types:** for every generated value, `parse(T, stringify(v))` succeeds and equals `v`, and the JSON validates against `json_schema.of(T)` with the N5 validator. This runs over the test suite's types and the support example's types.
+
+**Exit criteria:**
+- Unit tests per mapping and per constraint, each confirming every generated value parses.
+- The round-trip property over at least 30 types, 500 values each, in normal `zig build test`.
+- The same property under `zig build test --fuzz` for a minute in local runs, not in CI.
+- Compile-fail: an `arbitrary` override with the wrong signature.
+
+### 19.4 N15: `z.testing.fuzzTool` (D52)
+
+**API.**
+
+```zig
+test "lookup_order survives arbitrary input" {
+    var ctx = try TestCtx.init();
+    try z.testing.fuzzTool(app.App, LookupOrder, .{ .ctx = &ctx, .iterations = 300, .seed = 1 });
+}
+```
+
+**Design.** Each iteration takes the path a model's tool call takes: arguments JSON, `schema.parse`, `execute`, output serialization. Two modes run in each call:
+- **Valid inputs:** `arbitrary(Input)`. A failure is a panic, a leak (the call's arena is backed by `std.testing.allocator`, so memory the tool keeps outside it through `ctx` shows up), an output that doesn't validate against `Output`'s schema, or an error the tool doesn't map through `error_messages` when `.mapped_errors_only = true`. Returning a mapped error is fine, because models see it as a tool result.
+- **Hostile arguments:** valid JSON for `Input` mutated (wrong types, missing and extra fields, out-of-range numbers, truncated text, deep nesting). `parse` must return a validation issue with a message, never crash, and `execute` must never see the input. This tests zastra's parser as much as the tool.
+- **Effects gate (§5.12).** A tool declaring `.writes`, `.network`, `.spends_money` or `.destructive` is refused at compile time unless the call passes `.allow_effects = .{ ... }` naming them. Fuzzing a refund tool against a real payment API should never happen by accident.
+- **Reporting.** The first failure prints the seed, the iteration and the input JSON, so `.seed` and `.iterations = 1` reproduce it. Under `--fuzz` it uses the Smith source and the fuzzer's corpus.
+- Tools run with a `z.ToolCtx` built from the given `ctx`, with no model or agent run: `run_id` and `tool_call_id` are fixed test values and `trace` is a disabled span.
+
+**Exit criteria:**
+- Self-tests with planted bugs: a tool that leaks through `ctx`, one that returns invalid output, one that panics on the empty string (run as a child process, expecting the crash and the printed seed), and a parser gap, if one turns up.
+- The support example fuzzes `lookup_order` and `faq_search`, and `issue_refund` with `.allow_effects`, against a test database.
+- Compile-fail: an effectful tool without `.allow_effects`, and an `.allow_effects` that names an effect the tool doesn't have.
+
+### 19.5 N16: release v1.3.0
+
+- Update `sketch/`, `docs/`, the PLAN sections and the manifest in the same commits as the code (CLAUDE.md).
+- Size budgets unchanged. Record the `.otlp` cost; everything else adds nothing to App binaries.
+- Compile time within 25% of v1.0.0 on the same CI runner.
+- CI green on all four targets.
+- Live: OTLP into Jaeger; `dev serve` with a streamed approval and resume on both providers.
+- CHANGELOG, then tag `v1.3.0`.
+
+### 19.6 Order, dependencies and risks
+
+Order: N12, N14, N15, N13.
+- N14 before N15 (fuzzing generates inputs with `arbitrary`).
+- N13 last: it's the largest, and `GET /api/traces` reads the JSONL format, which N12 leaves alone but touches nearby.
+- N12 is independent.
+
+| Risk | Mitigation |
+|---|---|
+| A slow or unreachable collector backs up span export and stalls runs | `Span.end` only copies into a bounded queue; sending happens on the background task; drops are counted, never blocking |
+| The exporter's background task outlives `rt.deinit()` or loses the last spans | `deinit` cancels the task, then flushes once with a time limit; a test checks the last span arrives |
+| The dev server is reachable from a browser tab on a malicious site | Loopback bind, `Host` and `Origin` checks, no CORS by default, token required off loopback |
+| A disconnected SSE client leaves a run executing and spending tokens | Disconnect cancels the run's task; a test checks the scripted model gets no further requests |
+| `std.testing.Smith` is new in 0.16 and may change | The generator is written against an internal interface; Smith is one adapter |
+| `arbitrary` makes values the parser rejects (bugs in either) | The round-trip property is the main test of both; a disagreement fails loudly with the value |
+| Fuzzing effectful tools by accident | Compile-time effects gate |
