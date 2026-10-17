@@ -180,6 +180,100 @@ test "openai: parallel tool calls accumulate by index" {
     try t.expectEqualStrings("issue_refund", bs[1].tool_use.name);
 }
 
+test "openai: every event of one chunk arrives, in order, and made-up tool ids match" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var rp: P.http.Replay = .init(t.allocator, &.{.{ .url_suffix = "/chat/completions", .body = @embedFile("cassettes/openai_one_chunk.sse") }});
+    defer rp.deinit();
+    var h: P.http.Http = .initReplay(t.allocator, t.io, &rp);
+    defer h.deinit();
+    const prefix = comptime P.openai_compat.buildPrefix(.{ .spec = spec("openai/gpt-5-mini") });
+    var s = try P.openai_compat.Stream.open(a, &h, .{
+        .base_url = "https://api.openai.com/v1",
+        .api_key = "k",
+        .prefix = prefix,
+        .messages = &.{.user("Look up ORD-0 to ORD-9")},
+        .max_tokens = 100,
+    });
+    defer s.close();
+
+    // One chunk: reasoning, content, then a start and an args delta per tool call.
+    var kinds: std.ArrayList(u8) = .empty;
+    var start_ids: std.ArrayList([]const u8) = .empty;
+    var args: [10]std.ArrayList(u8) = @splat(.empty);
+    const fin = while (try s.next()) |ev| switch (ev) {
+        .delta => |d| switch (d) {
+            .reasoning => try kinds.append(a, 'r'),
+            .text => try kinds.append(a, 't'),
+            .tool_call_start => |c| {
+                try kinds.append(a, 's');
+                try start_ids.append(a, try a.dupe(u8, c.id));
+            },
+            .tool_call_args => |c| {
+                try kinds.append(a, 'a');
+                try args[c.index].appendSlice(a, c.json);
+            },
+        },
+        .finish => |f| break f,
+    } else return error.NoFinish;
+
+    try t.expectEqualStrings("rt" ++ "sa" ** 10, kinds.items);
+    const bs = fin.message.content.blocks;
+    try t.expectEqual(z.FinishReason.tool_use, fin.reason);
+    try t.expectEqual(@as(usize, 12), bs.len);
+    for (bs[2..], 0..) |b, i| {
+        try t.expectEqualStrings(b.tool_use.id, start_ids.items[i]);
+        try t.expectEqualStrings(b.tool_use.input_json, args[i].items);
+    }
+    try t.expectEqualStrings("call_9", bs[11].tool_use.id);
+}
+
+test "openai: error response with only a code becomes a diagnostic" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    var rp: P.http.Replay = .init(t.allocator, &.{
+        .{ .url_suffix = "/chat/completions", .status = 404, .body = @embedFile("cassettes/openai_error.json") },
+        .{ .url_suffix = "/chat/completions", .status = 502, .body = "Bad Gateway" },
+    });
+    defer rp.deinit();
+    var h: P.http.Http = .initReplay(t.allocator, t.io, &rp);
+    defer h.deinit();
+    var diag: P.Diagnostic = .{};
+    const prefix = comptime P.openai_compat.buildPrefix(.{ .spec = spec("openai/gpt-5-mini") });
+    const req: P.Request = .{
+        .base_url = "https://api.groq.com/openai/v1",
+        .api_key = "k",
+        .prefix = prefix,
+        .messages = &.{.user("Hi")},
+        .max_tokens = 100,
+        .diag = &diag,
+    };
+    try t.expectError(error.BadRequest, P.openai_compat.Stream.open(arena.allocator(), &h, req));
+    try t.expectEqualStrings("openai 404 model_not_found: The model `llama-9` does not exist or you do not have access to it.", diag.message());
+    try t.expectError(error.ProviderError, P.openai_compat.Stream.open(arena.allocator(), &h, req));
+    try t.expectEqualStrings("openai 502: Bad Gateway", diag.message());
+}
+
+test "a body that ends before the finish event is StreamInterrupted" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    var rp: P.http.Replay = .init(t.allocator, &.{.{ .url_suffix = "/v1/messages", .body = @embedFile("cassettes/anthropic_cut.sse") }});
+    defer rp.deinit();
+    var h: P.http.Http = .initReplay(t.allocator, t.io, &rp);
+    defer h.deinit();
+    const prefix = comptime P.anthropic.buildPrefix(.{ .spec = spec("anthropic/claude-haiku-4-5") });
+    var text: std.ArrayList(u8) = .empty;
+    try t.expectError(error.StreamInterrupted, collect(P.anthropic, arena.allocator(), &h, .{
+        .base_url = "https://api.anthropic.com",
+        .api_key = "k",
+        .prefix = prefix,
+        .messages = &.{.user("Hi")},
+        .max_tokens = 100,
+    }, &text));
+    try t.expectEqualStrings("Hi th", text.items);
+}
+
 /// Accepts one connection, sends headers and one event, then goes silent.
 fn stallingServer(io: std.Io, server: *std.Io.net.Server) !void {
     const conn = try server.accept(io);

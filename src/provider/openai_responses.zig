@@ -10,7 +10,7 @@ const std = @import("std");
 const p = @import("provider.zig");
 const msg = @import("../message.zig");
 const sse = @import("sse.zig");
-const http = @import("http.zig");
+const stream = @import("stream.zig");
 const catalog = @import("../catalog/catalog.zig");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -222,161 +222,112 @@ fn writeAssistantText(w: *Writer, t: []const u8) Writer.Error!void {
     try w.writeAll("}]}");
 }
 
-pub const Stream = struct {
-    arena: Allocator,
-    scratch: std.heap.ArenaAllocator,
-    res: *http.Response,
-    events: sse.Stream,
-    builder: p.Builder,
-    diag: ?*p.Diagnostic,
-    done: bool = false,
+pub const path = "/responses";
+
+pub fn auth(arena: Allocator, api_key: ?[]const u8) Allocator.Error![]const std.http.Header {
+    const k = api_key orelse return &.{};
+    const hs = try arena.alloc(std.http.Header, 1);
+    hs[0] = .{ .name = "authorization", .value = try std.fmt.allocPrint(arena, "Bearer {s}", .{k}) };
+    return hs;
+}
+
+pub const Stream = stream.SseStream(@This());
+
+pub const State = struct {
     refused: bool = false,
-
-    pub fn open(arena: Allocator, h: *http.Http, req: p.Request) p.Error!Stream {
-        var aw: Writer.Allocating = .init(arena);
-        writeBody(&aw.writer, req) catch return error.OutOfMemory;
-        const url = std.fmt.allocPrint(arena, "{s}/responses", .{req.base_url}) catch return error.OutOfMemory;
-        var headers: std.ArrayList(std.http.Header) = .empty;
-        headers.append(arena, .{ .name = "accept", .value = "text/event-stream" }) catch return error.OutOfMemory;
-        if (req.api_key) |k| {
-            const v = std.fmt.allocPrint(arena, "Bearer {s}", .{k}) catch return error.OutOfMemory;
-            headers.append(arena, .{ .name = "authorization", .value = v }) catch return error.OutOfMemory;
-        }
-        for (req.headers) |hd| headers.append(arena, .{ .name = hd[0], .value = hd[1] }) catch return error.OutOfMemory;
-
-        const res = h.post(url, headers.items, aw.written()) catch |err| return p.mapHttpError(err);
-        if (!res.ok()) {
-            defer res.close();
-            const body = res.readAll(arena, 8192) catch "";
-            return p.statusError(res.status, errorMessage(arena, res.status, body), req.diag);
-        }
-        return .{
-            .arena = arena,
-            .scratch = .init(h.gpa),
-            .res = res,
-            .events = .init(h.gpa, res.reader),
-            .builder = .{ .arena = arena },
-            .diag = req.diag,
-        };
-    }
-
-    pub fn close(s: *Stream) void {
-        s.events.deinit();
-        s.scratch.deinit();
-        s.res.close();
-    }
-
-    /// `response.completed`, `response.incomplete` or `response.failed`.
-    fn finish(s: *Stream, response: std.json.Value) p.Error!p.Event {
-        s.done = true;
-        const status = p.getStr(response, "status") orelse "completed";
-        if (std.mem.eql(u8, status, "failed")) {
-            const e = response.object.get("error") orelse .null;
-            if (s.diag) |d| d.print(0, "openai response failed: {s}: {s}", .{ p.getStr(e, "code") orelse "error", p.getStr(e, "message") orelse "unknown" });
-            return error.ProviderError;
-        }
-        var usage: msg.Usage = .{};
-        if (response.object.get("usage")) |u| if (u == .object) {
-            var cached: u64 = 0;
-            var written: u64 = 0;
-            if (u.object.get("input_tokens_details")) |d| {
-                cached = p.getU64(d, "cached_tokens");
-                written = p.getU64(d, "cache_write_tokens");
-            }
-            usage.input_tokens = p.getU64(u, "input_tokens") -| cached -| written;
-            usage.cache_read_tokens = cached;
-            usage.cache_write_tokens = written;
-            usage.output_tokens = p.getU64(u, "output_tokens");
-        };
-        const message = s.builder.finish();
-        var reason: msg.FinishReason = if (message.count(.tool_use) > 0) .tool_use else .end_turn;
-        if (s.refused) reason = .refusal;
-        if (std.mem.eql(u8, status, "incomplete")) {
-            const why = if (response.object.get("incomplete_details")) |d| p.getStr(d, "reason") orelse "" else "";
-            reason = if (std.mem.eql(u8, why, "max_output_tokens")) .max_tokens else if (std.mem.eql(u8, why, "content_filter")) .refusal else .other;
-        }
-        return .{ .finish = .{ .reason = reason, .usage = usage, .message = message } };
-    }
-
-    pub fn next(s: *Stream) p.Error!?p.Event {
-        if (s.done) return null;
-        while (true) {
-            _ = s.scratch.reset(.retain_capacity);
-            const ev = s.events.next() catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return p.bodyReadError(s.res, s.diag),
-            } orelse return error.StreamInterrupted;
-            const sa = s.scratch.allocator();
-            const v = try p.parseData(sa, ev.data);
-            if (v != .object) return error.ProtocolError;
-            const ty = p.getStr(v, "type") orelse continue;
-            const idx: u32 = if (p.getInt(v, "output_index")) |i| @intCast(@max(i, 0)) else 0;
-
-            if (eql(ty, "response.output_text.delta") or eql(ty, "response.refusal.delta")) {
-                const d = p.getStr(v, "delta") orelse continue;
-                if (eql(ty, "response.refusal.delta")) s.refused = true;
-                if (d.len == 0) continue;
-                if (!s.builder.has(idx)) try s.builder.startText(idx);
-                try s.builder.append(idx, d);
-                return .{ .delta = .{ .text = d } };
-            } else if (eql(ty, "response.reasoning_summary_text.delta")) {
-                const d = p.getStr(v, "delta") orelse continue;
-                if (d.len == 0 or !s.builder.has(idx)) continue;
-                try s.builder.append(idx, d);
-                return .{ .delta = .{ .reasoning = d } };
-            } else if (eql(ty, "response.reasoning_summary_part.added")) {
-                // Summaries can come in several parts; keep them as paragraphs.
-                if ((p.getInt(v, "summary_index") orelse 0) > 0) try s.builder.append(idx, "\n\n");
-            } else if (eql(ty, "response.function_call_arguments.delta")) {
-                const d = p.getStr(v, "delta") orelse continue;
-                if (d.len == 0 or !s.builder.has(idx)) continue;
-                try s.builder.append(idx, d);
-                return .{ .delta = .{ .tool_call_args = .{ .index = idx, .json = d } } };
-            } else if (eql(ty, "response.output_item.added")) {
-                const item = v.object.get("item") orelse continue;
-                const kind = p.getStr(item, "type") orelse continue;
-                if (eql(kind, "message")) {
-                    try s.builder.startText(idx);
-                } else if (eql(kind, "reasoning")) {
-                    try s.builder.startReasoning(idx, null);
-                } else if (eql(kind, "function_call")) {
-                    const id = p.getStr(item, "call_id") orelse "";
-                    const fname = p.getStr(item, "name") orelse "";
-                    try s.builder.startToolUse(idx, id, fname);
-                    return .{ .delta = .{ .tool_call_start = .{ .index = idx, .id = id, .name = fname } } };
-                }
-            } else if (eql(ty, "response.output_item.done")) {
-                const item = v.object.get("item") orelse continue;
-                const kind = p.getStr(item, "type") orelse "";
-                if (s.builder.open.getPtr(idx)) |o| {
-                    // The final encrypted content differs from the one sent
-                    // with `output_item.added`; only this one round-trips.
-                    if (eql(kind, "reasoning")) if (p.getStr(item, "encrypted_content")) |enc| try s.builder.appendSig(idx, enc);
-                    if (eql(kind, "function_call") and o.buf.items.len == 0)
-                        if (p.getStr(item, "arguments")) |args| try s.builder.append(idx, args);
-                }
-                s.builder.stop(idx);
-            } else if (eql(ty, "response.completed") or eql(ty, "response.incomplete") or eql(ty, "response.failed")) {
-                const r = v.object.get("response") orelse return error.ProtocolError;
-                if (r != .object) return error.ProtocolError;
-                return try s.finish(r);
-            } else if (eql(ty, "error")) {
-                if (s.diag) |d| d.print(0, "openai stream error: {s}: {s}", .{ p.getStr(v, "code") orelse "error", p.getStr(v, "message") orelse "unknown" });
-                return error.ProviderError;
-            }
-        }
-    }
 };
+
+/// `response.completed`, `response.incomplete` or `response.failed`.
+fn finish(st: *State, response: std.json.Value, out: *stream.Out) p.Error!void {
+    const status = p.getStr(response, "status") orelse "completed";
+    if (std.mem.eql(u8, status, "failed")) {
+        const e = response.object.get("error") orelse .null;
+        if (out.diag) |d| d.print(0, "openai response failed: {s}: {s}", .{ p.getStr(e, "code") orelse "error", p.getStr(e, "message") orelse "unknown" });
+        return error.ProviderError;
+    }
+    var usage: msg.Usage = .{};
+    if (response.object.get("usage")) |u| if (u == .object) {
+        var cached: u64 = 0;
+        var written: u64 = 0;
+        if (u.object.get("input_tokens_details")) |d| {
+            cached = p.getU64(d, "cached_tokens");
+            written = p.getU64(d, "cache_write_tokens");
+        }
+        usage.input_tokens = p.getU64(u, "input_tokens") -| cached -| written;
+        usage.cache_read_tokens = cached;
+        usage.cache_write_tokens = written;
+        usage.output_tokens = p.getU64(u, "output_tokens");
+    };
+    const message = out.builder.finish();
+    var reason: msg.FinishReason = if (message.count(.tool_use) > 0) .tool_use else .end_turn;
+    if (st.refused) reason = .refusal;
+    if (std.mem.eql(u8, status, "incomplete")) {
+        const why = if (response.object.get("incomplete_details")) |d| p.getStr(d, "reason") orelse "" else "";
+        reason = if (std.mem.eql(u8, why, "max_output_tokens")) .max_tokens else if (std.mem.eql(u8, why, "content_filter")) .refusal else .other;
+    }
+    try out.finish(.{ .reason = reason, .usage = usage, .message = message });
+}
+
+pub fn onEvent(st: *State, _: sse.Event, v: std.json.Value, out: *stream.Out) p.Error!void {
+    const b = out.builder;
+    if (v != .object) return error.ProtocolError;
+    const ty = p.getStr(v, "type") orelse return;
+    const idx: u32 = if (p.getInt(v, "output_index")) |i| @intCast(@max(i, 0)) else 0;
+
+    if (eql(ty, "response.output_text.delta") or eql(ty, "response.refusal.delta")) {
+        const d = p.getStr(v, "delta") orelse return;
+        if (eql(ty, "response.refusal.delta")) st.refused = true;
+        if (d.len == 0) return;
+        if (!b.has(idx)) try b.startText(idx);
+        try b.append(idx, d);
+        try out.push(.{ .delta = .{ .text = d } });
+    } else if (eql(ty, "response.reasoning_summary_text.delta")) {
+        const d = p.getStr(v, "delta") orelse return;
+        if (d.len == 0 or !b.has(idx)) return;
+        try b.append(idx, d);
+        try out.push(.{ .delta = .{ .reasoning = d } });
+    } else if (eql(ty, "response.reasoning_summary_part.added")) {
+        // Summaries can come in several parts; keep them as paragraphs.
+        if ((p.getInt(v, "summary_index") orelse 0) > 0) try b.append(idx, "\n\n");
+    } else if (eql(ty, "response.function_call_arguments.delta")) {
+        const d = p.getStr(v, "delta") orelse return;
+        if (d.len == 0 or !b.has(idx)) return;
+        try b.append(idx, d);
+        try out.push(.{ .delta = .{ .tool_call_args = .{ .index = idx, .json = d } } });
+    } else if (eql(ty, "response.output_item.added")) {
+        const item = v.object.get("item") orelse return;
+        const kind = p.getStr(item, "type") orelse return;
+        if (eql(kind, "message")) {
+            try b.startText(idx);
+        } else if (eql(kind, "reasoning")) {
+            try b.startReasoning(idx, null);
+        } else if (eql(kind, "function_call")) {
+            const id = p.getStr(item, "call_id") orelse "";
+            const fname = p.getStr(item, "name") orelse "";
+            try b.startToolUse(idx, id, fname);
+            try out.push(.{ .delta = .{ .tool_call_start = .{ .index = idx, .id = id, .name = fname } } });
+        }
+    } else if (eql(ty, "response.output_item.done")) {
+        const item = v.object.get("item") orelse return;
+        const kind = p.getStr(item, "type") orelse "";
+        if (b.open.getPtr(idx)) |o| {
+            // The final encrypted content differs from the one sent
+            // with `output_item.added`; only this one round-trips.
+            if (eql(kind, "reasoning")) if (p.getStr(item, "encrypted_content")) |enc| try b.appendSig(idx, enc);
+            if (eql(kind, "function_call") and o.buf.items.len == 0)
+                if (p.getStr(item, "arguments")) |args| try b.append(idx, args);
+        }
+        b.stop(idx);
+    } else if (eql(ty, "response.completed") or eql(ty, "response.incomplete") or eql(ty, "response.failed")) {
+        const r = v.object.get("response") orelse return error.ProtocolError;
+        if (r != .object) return error.ProtocolError;
+        try finish(st, r, out);
+    } else if (eql(ty, "error")) {
+        if (out.diag) |d| d.print(0, "openai stream error: {s}: {s}", .{ p.getStr(v, "code") orelse "error", p.getStr(v, "message") orelse "unknown" });
+        return error.ProviderError;
+    }
+}
 
 fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
-}
-
-fn errorMessage(arena: Allocator, status: u16, body: []const u8) []const u8 {
-    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch
-        return std.fmt.allocPrint(arena, "openai {d}: {s}", .{ status, body }) catch body;
-    const e = (if (v == .object) v.object.get("error") else null) orelse v;
-    return std.fmt.allocPrint(arena, "openai {d} {s}: {s}", .{
-        status, p.getStr(e, "type") orelse p.getStr(e, "code") orelse "error", p.getStr(e, "message") orelse body,
-    }) catch body;
 }

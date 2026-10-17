@@ -175,7 +175,7 @@ fn addSizeChecks(b: *std.Build, host_mod: *std.Build.Module, sqlite_dep: *std.Bu
         if (strip) {
             run.addArg(b.fmt("{d}", .{v.budget}));
         } else {
-            run.addArgs(&.{ "100000000", "--absent", "provider.openai_compat.", "--present", "provider.anthropic.Stream" });
+            run.addArgs(&.{ "100000000", "--absent", "provider.openai_compat", "--absent", "provider.openai_responses", "--present", "provider.stream.SseStream(provider.anthropic)" });
         }
         run.has_side_effects = true;
         step.dependOn(&run.step);

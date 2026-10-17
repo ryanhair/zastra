@@ -5,7 +5,7 @@ const std = @import("std");
 const p = @import("provider.zig");
 const msg = @import("../message.zig");
 const sse = @import("sse.zig");
-const http = @import("http.zig");
+const stream = @import("stream.zig");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
@@ -188,158 +188,98 @@ fn writeMessage(w: *Writer, m: msg.Message, n: *usize) Writer.Error!void {
     }
 }
 
-pub const Stream = struct {
-    arena: Allocator,
-    scratch: std.heap.ArenaAllocator,
-    res: *http.Response,
-    events: sse.Stream,
-    builder: p.Builder,
+pub const path = "/chat/completions";
+
+pub fn auth(arena: Allocator, api_key: ?[]const u8) Allocator.Error![]const std.http.Header {
+    const k = api_key orelse return &.{};
+    const hs = try arena.alloc(std.http.Header, 1);
+    hs[0] = .{ .name = "authorization", .value = try std.fmt.allocPrint(arena, "Bearer {s}", .{k}) };
+    return hs;
+}
+
+pub const Stream = stream.SseStream(@This());
+
+pub const end_marker = "[DONE]";
+
+pub const State = struct {
     usage: msg.Usage = .{},
     stop_reason: ?msg.FinishReason = null,
-    diag: ?*p.Diagnostic,
-    done: bool = false,
     started_text: bool = false,
     started_reasoning: bool = false,
+    /// Indexes of the tool calls started so far.
     tool_ids: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    /// Events from one chunk after the first, returned by the next calls
-    /// (a chunk can start a tool call and carry its first arguments).
-    pending: [16]p.Event = undefined,
-    pending_len: usize = 0,
-    pending_pos: usize = 0,
-
-    fn add(s: *Stream, e: p.Event) void {
-        if (s.pending_len < s.pending.len) {
-            s.pending[s.pending_len] = e;
-            s.pending_len += 1;
-        }
-    }
-
-    pub fn open(arena: Allocator, h: *http.Http, req: p.Request) p.Error!Stream {
-        var aw: Writer.Allocating = .init(arena);
-        writeBody(&aw.writer, req) catch return error.OutOfMemory;
-        const url = std.fmt.allocPrint(arena, "{s}/chat/completions", .{req.base_url}) catch return error.OutOfMemory;
-        var headers: std.ArrayList(std.http.Header) = .empty;
-        headers.append(arena, .{ .name = "accept", .value = "text/event-stream" }) catch return error.OutOfMemory;
-        if (req.api_key) |k| {
-            const v = std.fmt.allocPrint(arena, "Bearer {s}", .{k}) catch return error.OutOfMemory;
-            headers.append(arena, .{ .name = "authorization", .value = v }) catch return error.OutOfMemory;
-        }
-        for (req.headers) |hd| headers.append(arena, .{ .name = hd[0], .value = hd[1] }) catch return error.OutOfMemory;
-
-        const res = h.post(url, headers.items, aw.written()) catch |err| return p.mapHttpError(err);
-        if (!res.ok()) {
-            defer res.close();
-            const body = res.readAll(arena, 8192) catch "";
-            return p.statusError(res.status, errorMessage(arena, res.status, body), req.diag);
-        }
-        return .{
-            .arena = arena,
-            .scratch = .init(h.gpa),
-            .res = res,
-            .events = .init(h.gpa, res.reader),
-            .builder = .{ .arena = arena },
-            .diag = req.diag,
-        };
-    }
-
-    pub fn close(s: *Stream) void {
-        s.events.deinit();
-        s.scratch.deinit();
-        s.tool_ids.deinit(s.arena);
-        s.res.close();
-    }
-
-    fn finish(s: *Stream) p.Event {
-        s.done = true;
-        const msg_out = s.builder.finish();
-        var reason = s.stop_reason orelse .end_turn;
-        // Some compatible servers report "stop" even when they returned tool calls.
-        if (reason == .end_turn and msg_out.count(.tool_use) > 0) reason = .tool_use;
-        return .{ .finish = .{ .reason = reason, .usage = s.usage, .message = msg_out } };
-    }
-
-    pub fn next(s: *Stream) p.Error!?p.Event {
-        if (s.pending_pos < s.pending_len) {
-            defer s.pending_pos += 1;
-            return s.pending[s.pending_pos];
-        }
-        if (s.done) return null;
-        while (true) {
-            _ = s.scratch.reset(.retain_capacity);
-            s.pending_len = 0;
-            s.pending_pos = 0;
-            const ev = s.events.next() catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return p.bodyReadError(s.res, s.diag),
-            } orelse {
-                if (s.stop_reason != null) return s.finish();
-                return error.StreamInterrupted;
-            };
-            if (std.mem.eql(u8, std.mem.trim(u8, ev.data, " "), "[DONE]")) return s.finish();
-            const sa = s.scratch.allocator();
-            const v = try p.parseData(sa, ev.data);
-            if (v != .object) return error.ProtocolError;
-            if (v.object.get("error")) |e| {
-                if (s.diag) |dg| dg.print(0, "openai stream error: {s}", .{p.getStr(e, "message") orelse "unknown"});
-                return error.ProviderError;
-            }
-            if (v.object.get("usage")) |u| if (u == .object) {
-                const prompt = p.getU64(u, "prompt_tokens");
-                var cached: u64 = 0;
-                if (u.object.get("prompt_tokens_details")) |d| cached = p.getU64(d, "cached_tokens");
-                s.usage.input_tokens = prompt -| cached;
-                s.usage.cache_read_tokens = cached;
-                s.usage.output_tokens = p.getU64(u, "completion_tokens");
-            };
-            const choices = v.object.get("choices") orelse continue;
-            if (choices != .array or choices.array.items.len == 0) continue;
-            const c = choices.array.items[0];
-            if (c.object.get("finish_reason")) |fr| if (fr == .string) {
-                s.stop_reason = mapStop(fr.string);
-            };
-            const d = c.object.get("delta") orelse continue;
-            if (d != .object) continue;
-
-            // A chunk can carry several things: return the first event now and
-            // the rest from the next calls.
-            if (p.getStr(d, "reasoning_content") orelse p.getStr(d, "reasoning")) |r| if (r.len > 0) {
-                if (!s.started_reasoning) {
-                    try s.builder.startReasoning(reasoning_index, null);
-                    s.started_reasoning = true;
-                }
-                try s.builder.append(reasoning_index, r);
-                s.add(.{ .delta = .{ .reasoning = r } });
-            };
-            if (p.getStr(d, "content")) |t| if (t.len > 0) {
-                if (!s.started_text) {
-                    try s.builder.startText(text_index);
-                    s.started_text = true;
-                }
-                try s.builder.append(text_index, t);
-                s.add(.{ .delta = .{ .text = t } });
-            };
-            if (d.object.get("tool_calls")) |tcs| if (tcs == .array) for (tcs.array.items) |tc| {
-                const idx: u32 = @intCast(p.getInt(tc, "index") orelse 0);
-                const f = tc.object.get("function");
-                if (!s.tool_ids.contains(idx)) {
-                    const id = p.getStr(tc, "id") orelse "";
-                    const fname = if (f) |ff| p.getStr(ff, "name") orelse "" else "";
-                    try s.builder.startToolUse(idx, if (id.len > 0) id else try std.fmt.allocPrint(s.arena, "call_{d}", .{idx}), fname);
-                    s.tool_ids.put(s.arena, idx, {}) catch return error.OutOfMemory;
-                    s.add(.{ .delta = .{ .tool_call_start = .{ .index = idx, .id = id, .name = fname } } });
-                }
-                if (f) |ff| if (p.getStr(ff, "arguments")) |args| if (args.len > 0) {
-                    try s.builder.append(idx, args);
-                    s.add(.{ .delta = .{ .tool_call_args = .{ .index = idx, .json = args } } });
-                };
-            };
-            if (s.pending_len > 0) {
-                s.pending_pos = 1;
-                return s.pending[0];
-            }
-        }
-    }
 };
+
+/// `[DONE]`, or the end of the body once a finish reason arrived.
+pub fn onEnd(st: *State, out: *stream.Out, why: stream.End) p.Error!void {
+    if (why == .eof and st.stop_reason == null) return error.StreamInterrupted;
+    const msg_out = out.builder.finish();
+    var reason = st.stop_reason orelse .end_turn;
+    // Some compatible servers report "stop" even when they returned tool calls.
+    if (reason == .end_turn and msg_out.count(.tool_use) > 0) reason = .tool_use;
+    try out.finish(.{ .reason = reason, .usage = st.usage, .message = msg_out });
+}
+
+/// A chunk can carry reasoning, content and several tool-call deltas; each
+/// becomes its own event, in that order.
+pub fn onEvent(st: *State, _: sse.Event, v: std.json.Value, out: *stream.Out) p.Error!void {
+    const b = out.builder;
+    if (v != .object) return error.ProtocolError;
+    if (v.object.get("error")) |e| {
+        if (out.diag) |dg| dg.print(0, "openai stream error: {s}", .{p.getStr(e, "message") orelse "unknown"});
+        return error.ProviderError;
+    }
+    if (v.object.get("usage")) |u| if (u == .object) {
+        const prompt = p.getU64(u, "prompt_tokens");
+        var cached: u64 = 0;
+        if (u.object.get("prompt_tokens_details")) |d| cached = p.getU64(d, "cached_tokens");
+        st.usage.input_tokens = prompt -| cached;
+        st.usage.cache_read_tokens = cached;
+        st.usage.output_tokens = p.getU64(u, "completion_tokens");
+    };
+    const choices = v.object.get("choices") orelse return;
+    if (choices != .array or choices.array.items.len == 0) return;
+    const c = choices.array.items[0];
+    if (c.object.get("finish_reason")) |fr| if (fr == .string) {
+        st.stop_reason = mapStop(fr.string);
+    };
+    const d = c.object.get("delta") orelse return;
+    if (d != .object) return;
+
+    if (p.getStr(d, "reasoning_content") orelse p.getStr(d, "reasoning")) |r| if (r.len > 0) {
+        if (!st.started_reasoning) {
+            try b.startReasoning(reasoning_index, null);
+            st.started_reasoning = true;
+        }
+        try b.append(reasoning_index, r);
+        try out.push(.{ .delta = .{ .reasoning = r } });
+    };
+    if (p.getStr(d, "content")) |t| if (t.len > 0) {
+        if (!st.started_text) {
+            try b.startText(text_index);
+            st.started_text = true;
+        }
+        try b.append(text_index, t);
+        try out.push(.{ .delta = .{ .text = t } });
+    };
+    if (d.object.get("tool_calls")) |tcs| if (tcs == .array) for (tcs.array.items) |tc| {
+        const idx: u32 = @intCast(p.getInt(tc, "index") orelse 0);
+        const f = tc.object.get("function");
+        if (!st.tool_ids.contains(idx)) {
+            const sent = p.getStr(tc, "id") orelse "";
+            // Some servers send no id; the delta and the message share the made-up one.
+            const id = if (sent.len > 0) sent else std.fmt.allocPrint(out.arena, "call_{d}", .{idx}) catch return error.OutOfMemory;
+            const fname = if (f) |ff| p.getStr(ff, "name") orelse "" else "";
+            try b.startToolUse(idx, id, fname);
+            st.tool_ids.put(out.arena, idx, {}) catch return error.OutOfMemory;
+            try out.push(.{ .delta = .{ .tool_call_start = .{ .index = idx, .id = id, .name = fname } } });
+        }
+        if (f) |ff| if (p.getStr(ff, "arguments")) |args| if (args.len > 0) {
+            try b.append(idx, args);
+            try out.push(.{ .delta = .{ .tool_call_args = .{ .index = idx, .json = args } } });
+        };
+    };
+}
 
 fn mapStop(s: []const u8) msg.FinishReason {
     if (std.mem.eql(u8, s, "stop")) return .end_turn;
@@ -347,13 +287,4 @@ fn mapStop(s: []const u8) msg.FinishReason {
     if (std.mem.eql(u8, s, "length")) return .max_tokens;
     if (std.mem.eql(u8, s, "content_filter")) return .refusal;
     return .other;
-}
-
-fn errorMessage(arena: Allocator, status: u16, body: []const u8) []const u8 {
-    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch
-        return std.fmt.allocPrint(arena, "openai {d}: {s}", .{ status, body }) catch body;
-    const e = (if (v == .object) v.object.get("error") else null) orelse v;
-    return std.fmt.allocPrint(arena, "openai {d} {s}: {s}", .{
-        status, p.getStr(e, "type") orelse p.getStr(e, "code") orelse "error", p.getStr(e, "message") orelse body,
-    }) catch body;
 }
