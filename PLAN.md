@@ -1798,6 +1798,16 @@ The last one becomes simpler after R1.
 **Exit criteria:**
 - All existing tests pass unmodified (cassettes, goldens, compile-fail), plus the new ones.
 - `zig build size`: no budget grows. Record the before and after numbers here.
+
+**Status: done.** `zig build size` (ReleaseSmall, stripped), before → after:
+
+| App | Before | After | Budget |
+|---|---|---|---|
+| anthropic_memory | 656,904 | 658,856 (+1,952) | 1,000,000 |
+| both_sqlite | 1,517,960 | 1,518,768 (+808) | 2,000,000 |
+| full | 1,596,808 | 1,598,256 (+1,448) | 3,000,000 |
+
+The growth (0.3% at most) hasn't been broken down by symbol. The size check's symbol patterns now name `provider.stream.SseStream(provider.anthropic)`, and they also check that `provider.openai_responses` is absent from the Anthropic-only App.
 - No `spec.api ==` outside `src/provider/` and `src/testing/scripted.zig`.
 - No `unreachable` in a wire module that depends on a check made elsewhere.
 
