@@ -547,4 +547,24 @@ test "the HTTP status server's tools show up when it's running" {
     try std.testing.expectEqualStrings("shipping: degraded: carrier delays in the EU, 1-2 extra days", result.content);
 }
 
+test "schema types round-trip, and lookup survives arbitrary input" {
+    // Random values (constraint boundaries, escapes, unicode, empty lists):
+    // the JSON zastra writes parses back to the same value and matches the
+    // JSON Schema the model sees.
+    inline for (.{
+        Ticket,            Triage,            Resolution,         Order,
+        LookupOrder.Input, IssueRefund.Input, IssueRefund.Output, CustomerNotes,
+        Review,            Gather.Output,     Draft,              SearchFaq.Output,
+    }) |T| try z.testing.expectRoundTrip(T, .{});
+
+    var db = OrderDb.fake(&.{});
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var prng: std.Random.DefaultPrng = .init(1);
+    for (0..100) |_| {
+        const in = try z.testing.arbitrary(LookupOrder.Input, arena.allocator(), prng.random());
+        _ = try db.findOrder(arena.allocator(), in.order_id);
+    }
+}
+
 pub const OrderDb = @import("order_db.zig").OrderDb;

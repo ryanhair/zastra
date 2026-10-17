@@ -108,7 +108,13 @@ fn typeName(v: Value) []const u8 {
 
 fn isType(v: Value, t: []const u8) bool {
     if (std.mem.eql(u8, t, "number")) return v == .integer or v == .float or v == .number_string;
-    if (std.mem.eql(u8, t, "integer")) return v == .integer or (v == .float and @floor(v.float) == v.float);
+    if (std.mem.eql(u8, t, "integer")) return switch (v) {
+        .integer => true,
+        .float => |f| @floor(f) == f,
+        // Integers beyond i64 (e.g. large u64) arrive as number strings.
+        .number_string => |s| std.mem.indexOfAny(u8, s, ".eE") == null,
+        else => false,
+    };
     return std.mem.eql(u8, typeName(v), t);
 }
 
@@ -295,4 +301,15 @@ test "D40: $ref, allOf, if/then/else, prefixItems, bounds" {
     // A self-referencing schema stops at the bounds instead of recursing forever.
     const loop = try std.json.parseFromSliceLeaky(Value, a, "{\"$ref\":\"#\"}", .{});
     try std.testing.expect((try validate(a, loop, .null)) == null);
+}
+
+test "integers beyond i64 are integers" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const schema = try std.json.parseFromSliceLeaky(Value, a, "{\"type\":\"integer\",\"minimum\":0,\"maximum\":18446744073709551615}", .{});
+    const big = try std.json.parseFromSliceLeaky(Value, a, "18446744073709551615", .{});
+    try std.testing.expect((try validate(a, schema, big)) == null);
+    const frac = try std.json.parseFromSliceLeaky(Value, a, "1.5", .{});
+    try std.testing.expect((try validate(a, schema, frac)) != null);
 }

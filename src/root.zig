@@ -91,6 +91,13 @@ pub const testing = struct {
     pub const Harness = h.Harness;
     pub const Step = h.Step;
     pub const expectSuspended = h.expectSuspended;
+    const arb = @import("testing/arbitrary.zig");
+    pub const arbitrary = arb.arbitrary;
+    pub const Gen = arb.Gen;
+    pub const GenOptions = arb.Options;
+    pub const expectRoundTrip = arb.expectRoundTrip;
+    pub const RoundTripOptions = arb.RoundTripOptions;
+    pub const roundTrip = arb.roundTrip;
 };
 pub const ToolResult = @import("agent/events.zig").ToolResult;
 pub const StepFinish = @import("agent/events.zig").StepFinish;

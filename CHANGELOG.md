@@ -11,6 +11,7 @@
 - `z.testing.harness(App, .{ .tracing = ... })`.
 - A test for a crash between a loop body's last save and the loop's progress save.
 - `docs/getting-started.md`: `.max_tokens_field = .max_completion_tokens` for `z.custom` models on OpenAI's Chat Completions endpoint.
+- `z.testing.arbitrary(T, arena, source)`: random values of a schema type that the parser accepts, edge-biased, from a `std.Random` or a `std.testing.Smith`. Types can override generation with `pub fn arbitrary(gen: *z.testing.Gen) !T`. `z.testing.expectRoundTrip(T, .{})` checks that values survive JSON and match the schema (D51).
 - `h.scriptModel("provider/id", steps)` and `h.model("provider/id")`: script and call `rt.model` under the test harness. `h.requestHeaders()` returns the headers of each model request (D54).
 
 ### Changed
@@ -19,6 +20,8 @@
 - Provider error responses use one diagnostic format for every API: `"<provider> <status> <type or code>: <message>"`. Anthropic bodies that carry only a `code` now show it.
 
 ### Fixed
+- `[N]u8` fields were written as JSON strings, while the schema and the parser expect an array of integers. They're written as arrays now.
+- MCP argument validation rejected integers beyond the i64 range (e.g. a large `u64`) as not being integers.
 - `.include_content = true` on JSONL tracing did nothing; model spans now carry the request and response messages.
 - Chat Completions (`openai_compat`): a chunk carrying more than 16 events (reasoning, content and many parallel tool calls) dropped the rest from the event stream. Every event now arrives, in order.
 - Under the test harness, agent requests dropped a model's `.headers` (only the routing header was sent).

@@ -449,6 +449,22 @@ test "large refunds pause for approval and resume after a restart" {
     try std.testing.expectEqual(1, db.refundCount());
 }
 
+test "schema types round-trip, and lookup survives arbitrary input" {
+    // 500 random values each: written as JSON, parsed back, compared, and
+    // validated against the schema the model sees.
+    try z.testing.expectRoundTrip(Triage, .{});
+    try z.testing.expectRoundTrip(IssueRefund.Input, .{});
+
+    var db = OrderDb.fake(&.{});
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var prng: std.Random.DefaultPrng = .init(1);
+    for (0..100) |_| {
+        const in = try z.testing.arbitrary(LookupOrder.Input, arena.allocator(), prng.random());
+        _ = try db.findOrder(arena.allocator(), in.order_id);
+    }
+}
+
 test "rt.model's escape hatch can be scripted too" {
     var db = OrderDb.fake(&.{});
     var ctx: Ctx = .{ .db = &db };

@@ -1958,6 +1958,14 @@ const order = try z.testing.arbitrary(LookupOrder.Input, arena, smith);
 - The same property under `zig build test --fuzz` for a minute in local runs, not in CI.
 - Compile-fail: an `arbitrary` override with the wrong signature.
 
+**Implemented (2026-10-17).**
+- `z.testing.arbitrary(T, arena, source)`, `z.testing.Gen` (`.init(arena, source, .{ .max_len, .max_items })`, `value`, `int`, `float`, `string`, `boolean`, `chance`, `index`) in `src/testing/arbitrary.zig`. Overrides apply to structs, unions and enums, at any depth.
+- Added `z.testing.expectRoundTrip(T, .{ .seed, .count = 500 })` and `z.testing.roundTrip(T, arena, v)` (for fuzz bodies), so apps can run the round-trip property on their own types; the support example does.
+- Two details the plan didn't name: an optional field with a non-null default is never generated as null (null is omitted from JSON and reads back as the default), and `?z.Json` never holds JSON `null` (it reads back as null).
+- The property found two bugs, both fixed: `[N]u8` was written as a JSON string while the schema and the parser use an array of integers, and the MCP validator rejected integers beyond i64 (a large `u64`) as non-integers.
+- 35 types × 500 values in `tests/arbitrary_test.zig` (about 5 s in Debug), plus 200 random-byte Smith inputs over all of them. Three compile-fail cases: wrong override parameter, wrong return type, wrong source type.
+- **Not met: `zig build test --fuzz`.** Zig 0.16.0's test runner doesn't compile in fuzz mode (`lib/compiler/test_runner.zig:566`, `*builtin.StackTrace` passed where `*const debug.StackTrace` is expected), so no fuzz test can run on 0.16.0. The `std.testing.fuzz` test is in place and runs its single empty input in normal tests; the random-byte Smith test covers the Smith path until a Zig release fixes the runner.
+
 ### 19.4 N15: `z.testing.fuzzTool` (D52)
 
 **API.**

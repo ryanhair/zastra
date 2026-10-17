@@ -44,7 +44,9 @@ pub fn write(value: anytype, w: *Writer) Writer.Error!void {
             },
             else => @compileError("zastra: can't write " ++ @typeName(T) ++ " as JSON"),
         },
-        .array => |a| if (a.child == u8) try writeString(&value, w) else {
+        // Arrays are JSON arrays, `[N]u8` included, as the schema says.
+        // (A pointer to a byte array, like a string literal, is a string.)
+        .array => {
             try w.writeByte('[');
             for (value, 0..) |item, i| {
                 if (i > 0) try w.writeByte(',');
@@ -143,4 +145,9 @@ test write {
     const s = try stringifyAlloc(gpa, T{ .a = 1, .u = .{ .p = .{ .q = true } } });
     defer gpa.free(s);
     try std.testing.expectEqualStrings("{\"a\":1,\"c\":\"y\",\"u\":{\"type\":\"p\",\"q\":true},\"j\":[1,2]}", s);
+
+    // `[N]u8` is an array, as the schema describes it; a string literal is a string.
+    const b = try stringifyAlloc(gpa, .{ .bytes = [2]u8{ 104, 105 }, .lit = "hi" });
+    defer gpa.free(b);
+    try std.testing.expectEqualStrings("{\"bytes\":[104,105],\"lit\":\"hi\"}", b);
 }

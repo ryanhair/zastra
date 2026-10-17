@@ -293,6 +293,28 @@ test "refund flow" {
 
 Scripted turns are typed against your tools, so scripting a call with the wrong arguments fails to compile. They are rendered in the real provider wire format, which means the actual parsers and agent loop are exercised.
 
+### Random inputs
+
+`z.testing.arbitrary(T, arena, source)` makes a random `T` that the model-facing parser accepts: integers and floats inside `min`/`max`, strings inside `min_len`/`max_len` or from `one_of`, slices inside `min_items`/`max_items`, every enum tag and union variant, optionals sometimes null. About a quarter of picks are boundaries: the bounds themselves, 0, empty and maximum-length strings and lists, quotes, backslashes, control characters and multi-byte UTF-8. `source` is a seeded `std.Random` or a `*std.testing.Smith`.
+
+```zig
+test "lookup survives odd order ids" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var prng: std.Random.DefaultPrng = .init(1);
+    for (0..200) |_| {
+        const in = try z.testing.arbitrary(LookupOrder.Input, arena.allocator(), prng.random());
+        _ = db.findOrder(arena.allocator(), in.order_id) catch {};
+    }
+}
+
+test "schema types round-trip" {
+    try z.testing.expectRoundTrip(Triage, .{}); // 500 values: write, parse back, compare, validate
+}
+```
+
+Strings with a `pattern` get any characters within their length bounds (zastra doesn't enforce `pattern`). Unbounded strings are at most 64 characters and unbounded slices at most 8 items; `z.testing.Gen.init(arena, source, .{ .max_len, .max_items })` changes that. A type that needs values its schema can't describe declares `pub fn arbitrary(gen: *z.testing.Gen) !T` and builds them with `gen.int`, `gen.float`, `gen.string`, `gen.chance`, `gen.index` and `gen.value(Part)`.
+
 ## 8. Tracing
 
 Every agent run, step, model call, tool call and workflow step is a span. Pass `.tracing` to `App.init`:
