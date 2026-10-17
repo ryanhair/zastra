@@ -162,7 +162,8 @@ zastra/
       catalog.zig                  # lookup, did-you-mean, capability checks
     message.zig                    # internal message/content-block model
     provider/
-      provider.zig                 # Provider interface + comptime selection
+      provider.zig                 # shared types (Request, Event, Builder, Diagnostic) + comptime selection
+      stream.zig                   # SseStream(Wire): the request and event stream every wire module shares (D53)
       http.zig                     # std.http.Client wrapper, retries, timeouts, CA bundle (D12)
       sse.zig                      # Server-Sent Events parser
       anthropic.zig
@@ -526,18 +527,43 @@ Rules:
 
 ### 6.2 Provider interface (`provider/`)
 
+There is no runtime provider interface. Each API is a **wire module** (`anthropic.zig`, `openai_responses.zig`, `openai_compat.zig`), selected at comptime from the model's `catalog.Spec.api` through `provider.Impl(api)`. An App that only uses Anthropic models never references the OpenAI modules (§5.6). Since R1 (D53, §19.0):
+
 ```zig
-pub const Provider = struct {
-    ptr: *anyopaque,
-    vtable: *const struct {
-        stream: *const fn (ptr, alloc, req: Request, sink: *EventSink) anyerror!Finish,
-    },
-};
+// What callers see (agent loop, rt.model, tests): unchanged by R1.
+const Impl = provider.Impl(spec.api);
+const prefix = comptime Impl.buildPrefix(parts);           // §5.5
+var s = try Impl.Stream.open(arena, &http, request);       // = stream.SseStream(Impl)
+defer s.close();
+while (try s.next()) |ev| switch (ev) { .delta => ..., .finish => ... };
+
+// What a wire module supplies.
+pub const name = "anthropic";
+pub const path = "/v1/messages";
+pub const capabilities = .{ ... };                         // comptime facts, see below
+pub fn buildPrefix(comptime PrefixParts) Prefix;
+pub fn writeBody(*Writer, Request) !void;
+pub fn writeToolDef(*Writer, name, description, schema_json) !void;   // MCP tools
+pub fn auth(arena, api_key) ![]const std.http.Header;
+pub const State = struct { ... };                          // per-stream parse state
+pub fn onEvent(*State, sse.Event, data: std.json.Value, out: *Out) Error!void;
 ```
 
-Notes:
-- Only `stream` is required; `generate` is stream-and-collect.
-- Concrete providers are selected at comptime per model, so the vtable exists only for the raw `rt.model("...")` path and the erased APIs.
+`stream.SseStream(Wire)` (`stream.zig`) owns everything the APIs share:
+- the URL (`base_url ++ Wire.path`), headers (`accept`, `Wire.auth`, the request's header map) and the POST
+- non-2xx status: the error mapping and one diagnostic format, `"<name> <status> <type or code>: <message>"`
+- body read and idle-timeout errors, and `error.StreamInterrupted` when the body ends before a finish event
+- parsing each SSE event's data into JSON, the per-event scratch arena, and the `done` state
+- an event queue. `onEvent` pushes any number of events (`out.push`), or the final one (`out.finish`). The scratch arena resets only once the queue is drained, so delta slices stay valid until the next `next()` call.
+
+`Out` carries `.builder` (the assistant message being accumulated), `.scratch`, `.diag`, `.push(Event)` and `.finish(Finish)`. An `onEvent` that returns an error after writing `out.diag` reports a mid-stream provider error.
+
+**Capabilities.** Each wire module declares what its API can express, as comptime data:
+- the tool and structured-output schema dialects (§5.3), and whether native structured output can carry `z.Json`
+- how reasoning is turned on (adaptive or budget, an effort level, or only the model's default), how it's turned off (a disabled setting, effort `"none"`, or not at all), whether a token budget exists, and whether `.temperature` combines with reasoning
+- an optional hint appended to the `.show_reasoning` error
+
+`agent.zig` checks an agent's settings against these first (what the API can express), then against the model's `supports.reasoning_modes` from the catalog (what this model accepts), so a compile error says which of the two is the obstacle. All the error wording stays in `agent.zig` (§7). Nothing outside the wire modules switches on `spec.api`, except the scripted test model's encoders (`testing/scripted.zig`, D29).
 
 `http.zig` (built on `std.http.Client`; see D12 and the M0 spike notes in §11):
 - one shared `std.http.Client` per runtime
@@ -987,6 +1013,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D50 | `dev serve` | A library function (`z.dev.serve`) behind the dev CLI. SSE events use the C ABI's event JSON. Approvals suspend the run and close the stream; clients resume over a new request. Loopback by default, `Host`/`Origin` checks, a bearer token required off loopback. (§19.2) |
 | D51 | `z.testing.arbitrary(T)` | Values valid by construction for `schema.parse`, edge-biased, from `std.Random` or `std.testing.Smith`. `pattern` isn't generated (D27); a type can override with `pub fn arbitrary`. (§19.3) |
 | D52 | `z.testing.fuzzTool` | Valid and hostile inputs along the model's tool-call path. Effectful tools need `.allow_effects` at compile time. Failures print a reproducing seed. (§19.4) |
+| D53 | Provider modules | One shared `stream.SseStream(Wire)` owns the request, error mapping, SSE and JSON parsing and an unbounded event queue. Each API is a wire module supplying `path`, `auth`, `State`, `onEvent` and comptime `capabilities`. `agent.zig` reads the capabilities instead of switching on `spec.api`, and keeps all the error wording (§7). There is no runtime provider vtable: the raw `rt.model` path is comptime too (D15). Rejected: a `resolveReasoning` per wire module, which would scatter §7 wording over four files. (§6.2, §19.0) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
@@ -1716,6 +1743,7 @@ v1.1c is the tooling row of §17's table. It ships as **v1.3.0**. One public typ
 
 | Milestone | Scope | Size |
 |---|---|---|
+| R1 | Provider stream deepening (internal; two compat fixes) | medium |
 | N12 | OTLP trace exporter | medium |
 | N13 | `dev serve`: the dev CLI over HTTP + SSE | large |
 | N14 | `z.testing.arbitrary(T)` | medium |
@@ -1723,6 +1751,55 @@ v1.1c is the tooling row of §17's table. It ships as **v1.3.0**. One public typ
 | N16 | Release v1.3.0 | small |
 
 `models-update` reading `GET /v1/models` (listed in §14) shipped in N1 (§17.1), so it isn't here.
+
+### 19.0 R1: provider stream deepening (D53)
+
+**Problem.**
+- **Copied plumbing.** The three wire modules each carry their own copy of the request opening (URL, headers, POST, status check), the error-body parser, the start of the `next()` loop (scratch reset, SSE read, body errors, JSON parse) and the `Stream` struct. Compat's and Responses' `errorMessage` are byte-identical. Adding a fourth API means copying all of it again.
+- **One event per call.** `next()` returns at most one event per SSE event. Compat works around this with a fixed `pending: [16]Event` array whose `add` silently drops events past 16. Since N10, partial output reads `tool_call_args` deltas, so a dropped delta corrupts `.output_partial`.
+- **Compat tool-call id.** Compat's `tool_call_start` delta reports `id = ""` when the server sends none, while the builder stores the synthesized `call_N`.
+- **Provider decisions outside the providers.**
+  - `agent.zig` switches on `spec.api` for the schema dialects, the native-output rule and every branch of `resolveReasoning`.
+  - The dev CLI does the same for its reasoning column.
+  - Responses' `buildPrefix` has `.budget => unreachable`, which depends on a check in another file.
+- **`max_tokens_field` is ignored on two APIs.** Only compat reads it, so on the other two providers `z.custom(.{ .max_tokens_field = ... })` does nothing, and nothing says so.
+
+**Design** (§6.2):
+- **`stream.zig`.** `SseStream(Wire)` owns the shared request and stream handling. Each wire module supplies `name`, `path`, `auth`, `State`, `onEvent` and `capabilities`, and keeps `buildPrefix`, `writeBody` and `writeToolDef` unchanged.
+  - The queue is unbounded and lives in the scratch arena.
+  - Error bodies use one format for all three APIs: the error's `type`, falling back to its `code`.
+- **Callers are unchanged.** `Impl(api).Stream` keeps `open(arena, http, Request)`, `next() !?Event` and `close()`. `agent/run.zig`, `model.zig`, `testing/scripted.zig` and the cassette tests don't change.
+- **Capabilities** (§6.2) replace every `spec.api ==` in `agent.zig` and `build/dev.zig`.
+  - `resolveReasoning` checks the API's capabilities first, then the model's `supports.reasoning_modes`.
+  - The existing `reasoning_*` compile-fail tests pass unmodified, so the wording is unchanged.
+  - The catalog doesn't change; the default base URLs in `z.custom` stay there.
+- **`max_tokens_field`** stays on `Request`, documented as Chat-Completions-only. `z.custom` with `.provider = .anthropic` or `.openai_responses` and `.max_tokens_field` is a compile error (§7), with a compile-fail test.
+- **Compat fixes.** Every event of a chunk is delivered, in order. `tool_call_start` carries the same id as the final `tool_use` block.
+
+**Out of scope:**
+- one shared function to open a model stream for the agent loop and `rt.model`
+- a session-memory module out of `agent/run.zig`
+- moving the scripted encoders into the wire modules
+
+The last one becomes simpler after R1.
+
+**Tests.** Everything goes through the `Stream` interface with `http.Replay`, like `tests/provider_test.zig` today. There are no unit tests of `onEvent` directly. New cassettes:
+- a compat chunk carrying reasoning, content and more than 16 tool-call events: every delta arrives, in order
+- a compat tool call without an id: the `tool_call_start` id equals the final `tool_use.id`
+- a non-2xx error body per API: the shared diagnostic format
+- a body that ends mid-stream: `error.StreamInterrupted`, tested once
+
+**Commits**, each green on `zig build test` and `zig build size`:
+1. this plan, D53, the §6.2 rewrite, `GLOSSARY.md`
+2. `stream.zig`, the three wire modules on it, the compat fixes and new cassettes
+3. capabilities, `agent.zig`, `build/dev.zig`, the `z.custom` check and its compile-fail test
+4. CHANGELOG: "Fixed" for the two compat bugs, "Internal" for the rest
+
+**Exit criteria:**
+- All existing tests pass unmodified (cassettes, goldens, compile-fail), plus the new ones.
+- `zig build size`: no budget grows. Record the before and after numbers here.
+- No `spec.api ==` outside `src/provider/` and `src/testing/scripted.zig`.
+- No `unreachable` in a wire module that depends on a check made elsewhere.
 
 ### 19.1 N12: OTLP exporter (D49)
 
@@ -1857,7 +1934,8 @@ test "lookup_order survives arbitrary input" {
 
 ### 19.6 Order, dependencies and risks
 
-Order: N12, N14, N15, N13.
+Order: R1, N12, N14, N15, N13.
+- R1 first: it is internal, and it is easier to land before N13 adds new code that streams agent events.
 - N14 before N15 (fuzzing generates inputs with `arbitrary`).
 - N13 last: it's the largest, and `GET /api/traces` reads the JSONL format, which N12 leaves alone but touches nearby.
 - N12 is independent.
