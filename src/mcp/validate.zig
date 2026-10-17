@@ -127,6 +127,18 @@ fn num(v: Value) ?f64 {
     };
 }
 
+fn int(v: Value) ?i128 {
+    return switch (v) {
+        .integer => |i| i,
+        .number_string => |s| std.fmt.parseInt(i128, s, 10) catch null,
+        else => null,
+    };
+}
+
+fn fmtNum(v: Value) std.json.Formatter(Value) {
+    return std.json.fmt(v, .{});
+}
+
 fn issue(arena: Allocator, path: *std.ArrayList(u8), comptime fmt: []const u8, args: anytype) Allocator.Error!?Issue {
     return .{ .path = try arena.dupe(u8, path.items), .message = try std.fmt.allocPrint(arena, fmt, args) };
 }
@@ -186,8 +198,11 @@ fn checkInner(cx: *Ctx, schema: Value, v: Value, path: *std.ArrayList(u8)) Alloc
         if (!ok) return issue(arena, path, "doesn't match any allowed shape", .{});
     };
     if (num(v)) |n| {
-        if (s.get("minimum")) |m| if (num(m)) |lo| if (n < lo) return issue(arena, path, "must be at least {d}", .{lo});
-        if (s.get("maximum")) |m| if (num(m)) |hi| if (n > hi) return issue(arena, path, "must be at most {d}", .{hi});
+        // Integers compare exactly: as f64, i64 and u64 bounds round.
+        if (s.get("minimum")) |m| if (num(m)) |lo| if (if (int(v)) |iv| (if (int(m)) |im| iv < im else n < lo) else n < lo)
+            return issue(arena, path, "must be at least {f}", .{fmtNum(m)});
+        if (s.get("maximum")) |m| if (num(m)) |hi| if (if (int(v)) |iv| (if (int(m)) |im| iv > im else n > hi) else n > hi)
+            return issue(arena, path, "must be at most {f}", .{fmtNum(m)});
     }
     if (v == .string) {
         const len = std.unicode.utf8CountCodepoints(v.string) catch v.string.len;
@@ -312,4 +327,7 @@ test "integers beyond i64 are integers" {
     try std.testing.expect((try validate(a, schema, big)) == null);
     const frac = try std.json.parseFromSliceLeaky(Value, a, "1.5", .{});
     try std.testing.expect((try validate(a, schema, frac)) != null);
+    // One past the bound, which rounds to the bound as f64.
+    const over = try std.json.parseFromSliceLeaky(Value, a, "18446744073709551616", .{});
+    try std.testing.expectEqualStrings("must be at most 18446744073709551615", (try validate(a, schema, over)).?.message);
 }

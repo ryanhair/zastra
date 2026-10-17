@@ -1989,6 +1989,17 @@ test "lookup_order survives arbitrary input" {
 - The support example fuzzes `lookup_order` and `faq_search`, and `issue_refund` with `.allow_effects`, against a test database.
 - Compile-fail: an effectful tool without `.allow_effects`, and an `.allow_effects` that names an effect the tool doesn't have.
 
+**Implemented (2026-10-17).**
+- `z.testing.fuzzTool` in `src/testing/fuzz_tool.zig`. Options: `.ctx` (required), `.iterations` (300), `.seed`, `.mapped_errors_only`, `.allow_effects`, `.hostile` (default true), `.gen`, `.smith`, `.quiet`. Unknown options are a compile error. Iteration `i` uses seed `.seed + i` alone, so the printed seed with `.iterations = 1` reproduces it.
+- **Parser checks.** The arguments are also validated against the tool's JSON Schema with the N5 validator. A failure is: the parser accepts what the canonical and the OpenAI strict schema both reject, or rejects what the canonical schema accepts, or rejects without a message. Strict mode allows `null` for optionals and drops bounds, so when only it accepts, the case is skipped.
+- **Crashes.** Before each call the case is written to a static buffer, and a SIGABRT handler (installed for the duration of the call, posix only) prints it after the panic's stack trace. This is the one process-global in zastra; signal handlers can't take a context. The child-process self-test runs a test binary built by `build.zig` (`tests/fuzz_crash.zig`).
+- **Leaks.** fuzzTool can't attribute a leak to an iteration. Leaks surface through the allocators in `ctx` (`std.testing.allocator` fails the test). The self-test counts with a `DebugAllocator` so the planted leak doesn't fail the suite.
+- **`.quiet`** exists because the build runner fails a test that writes to stderr, so the self-tests of failing tools can't print their reports.
+- **Found by sweeping 20,000 hostile cases:**
+  - **A crash.** `std.json.Stringify` asserts a nesting depth of at most 256 in safe builds. zastra stringified untrusted `std.json.Value`s in seven places: `parse` for `z.Json` fields (model output and tool arguments), Anthropic opaque content blocks, MCP results, request state, tool schemas and JSON-RPC ids. Deeper JSON from a model or an MCP server panicked the process. All seven now go through `json.stringifyValueAlloc`, which returns `error.TooDeep`. That becomes a validation issue, a protocol error, or an error result for the model, depending on the caller.
+  - **Imprecise validator bounds.** The MCP validator compared integer bounds as f64, so `u64`/`i64` bounds plus or minus one passed. Integers now compare exactly.
+- **Support example.** The example has no `faq_search` tool (FAQ search is a workflow step), so it fuzzes `lookup_order` and `issue_refund`. `IssueRefund` now declares `effects = .{ .reads, .writes, .spends_money }`, which it should have had all along, so its fuzz test needs `.allow_effects`.
+
 ### 19.5 N16: release v1.3.0
 
 - Update `sketch/`, `docs/`, the PLAN sections and the manifest in the same commits as the code (CLAUDE.md).

@@ -72,7 +72,10 @@ const Parser = struct {
     /// `C` is the constraints literal for this position, or null.
     fn value(p: *Parser, comptime T: type, v: Value, comptime C: ?type) Error!T {
         if (T == Json) {
-            const raw = std.json.Stringify.valueAlloc(p.arena, v, .{}) catch return error.OutOfMemory;
+            const raw = json.stringifyValueAlloc(p.arena, v) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.TooDeep => return p.fail("nested more than {d} levels deep", .{json.max_value_depth}),
+            };
             return .{ .raw = raw };
         }
         switch (@typeInfo(T)) {
@@ -262,11 +265,11 @@ const Parser = struct {
     fn stringConstraints(p: *Parser, comptime CC: type, s: []const u8) Error!void {
         const len = std.unicode.utf8CountCodepoints(s) catch s.len;
         if (comptime has(CC, "min_len")) {
-                        if (len < cval(CC, "min_len")) return p.fail("must be at least {d} characters, got {d}", .{ cval(CC, "min_len"), len });
-                    }
+            if (len < cval(CC, "min_len")) return p.fail("must be at least {d} characters, got {d}", .{ cval(CC, "min_len"), len });
+        }
         if (comptime has(CC, "max_len")) {
-                        if (len > cval(CC, "max_len")) return p.fail("must be at most {d} characters, got {d}", .{ cval(CC, "max_len"), len });
-                    }
+            if (len > cval(CC, "max_len")) return p.fail("must be at most {d} characters, got {d}", .{ cval(CC, "max_len"), len });
+        }
         if (comptime has(CC, "one_of")) {
             const opts = cval(CC, "one_of");
             inline for (0..opts.len) |i| if (std.mem.eql(u8, opts[i], s)) return;

@@ -109,6 +109,9 @@ pub const IssueRefund = struct {
         pub const docs = .{ .amount_cents = "Must not exceed the order total" };
     };
     pub const Output = struct { refund_id: []const u8 };
+    /// What the tool can do (§5.12). Agents must `.allow` these, and
+    /// `z.testing.fuzzTool` refuses to fuzz it unless the test opts in.
+    pub const effects = .{ .reads, .writes, .spends_money };
 
     /// Presence of this decl makes the tool approval-gated. Return false to
     /// auto-run. (Or `pub const needs_approval = true;` to always ask.)
@@ -565,6 +568,19 @@ test "schema types round-trip, and lookup survives arbitrary input" {
         const in = try z.testing.arbitrary(LookupOrder.Input, arena.allocator(), prng.random());
         _ = try db.findOrder(arena.allocator(), in.order_id);
     }
+}
+
+test "tools survive arbitrary and hostile arguments" {
+    // An in-memory database backed by the testing allocator, so a refund
+    // that leaks fails the test.
+    var db = try OrderDb.open(std.testing.allocator, std.testing.io, "");
+    defer db.close();
+    var mailer: notify.Mailer = .{};
+    var ctx: Ctx = .{ .db = &db, .mailer = &mailer };
+    try z.testing.fuzzTool(App, LookupOrder, .{ .ctx = &ctx, .iterations = 300, .mapped_errors_only = true });
+    // Refunds write and spend money, so fuzzing them is opt-in.
+    try z.testing.fuzzTool(App, IssueRefund, .{ .ctx = &ctx, .iterations = 300, .allow_effects = .{ .writes, .spends_money } });
+    try std.testing.expect(db.refundCount() >= 300);
 }
 
 pub const OrderDb = @import("order_db.zig").OrderDb;

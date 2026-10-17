@@ -288,7 +288,13 @@ pub fn Manager(comptime kinds: Kinds) type {
                 .name = name,
                 .safe_name = try safeName(a, name),
                 .description = protocol.getStr(t, "description") orelse "",
-                .schema_json = try std.json.Stringify.valueAlloc(a, schema, .{}),
+                .schema_json = json.stringifyValueAlloc(a, schema) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.TooDeep => {
+                        std.log.warn("zastra: MCP server '{s}' tool '{s}' has an input schema nested too deeply; skipping it", .{ s.name, name });
+                        return null;
+                    },
+                },
                 .schema = schema,
             };
             if (kinds.http and isHttp(s)) switch (try protocol.paramHeaders(a, schema)) {
@@ -477,7 +483,11 @@ pub fn Manager(comptime kinds: Kinds) type {
                 };
                 const state = r.object.get("requestState") orelse
                     return .{ .content = "The MCP server asked for more input without saying what.", .is_error = true };
-                params = try std.fmt.allocPrint(arena, "\"name\":{f},\"arguments\":{s},\"requestState\":{s}", .{ json.fmt(t.name), args_text, try std.json.Stringify.valueAlloc(arena, state, .{}) });
+                const state_json = json.stringifyValueAlloc(arena, state) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.TooDeep => return .{ .content = "The MCP server's request state is nested too deeply.", .is_error = true },
+                };
+                params = try std.fmt.allocPrint(arena, "\"name\":{f},\"arguments\":{s},\"requestState\":{s}", .{ json.fmt(t.name), args_text, state_json });
             }
             return .{ .content = "The MCP server kept asking for more input.", .is_error = true };
         }
@@ -490,17 +500,25 @@ pub fn Manager(comptime kinds: Kinds) type {
             }
         }
 
+        const too_deep: runtime.McpResult = .{ .content = "The MCP server's result is nested too deeply to pass on.", .is_error = true };
+
         /// Prefer structured content; otherwise join the content parts.
         fn render(arena: Allocator, r: std.json.Value) !runtime.McpResult {
             const is_error = if (r == .object) (if (r.object.get("isError")) |e| e == .bool and e.bool else false) else false;
             if (r == .object) if (r.object.get("structuredContent")) |sc| if (sc != .null)
-                return .{ .content = try std.json.Stringify.valueAlloc(arena, sc, .{}), .is_error = is_error };
+                return .{ .content = json.stringifyValueAlloc(arena, sc) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.TooDeep => return too_deep,
+                }, .is_error = is_error };
             var text: std.ArrayList(u8) = .empty;
             if (r == .object) if (r.object.get("content")) |c| if (c == .array) for (c.array.items) |part| {
                 if (text.items.len > 0) try text.append(arena, '\n');
                 if (protocol.getStr(part, "text")) |tx| {
                     try text.appendSlice(arena, tx);
-                } else try text.appendSlice(arena, try std.json.Stringify.valueAlloc(arena, part, .{}));
+                } else try text.appendSlice(arena, json.stringifyValueAlloc(arena, part) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.TooDeep => return too_deep,
+                });
             };
             return .{ .content = text.items, .is_error = is_error };
         }

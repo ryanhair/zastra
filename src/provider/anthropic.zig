@@ -6,6 +6,7 @@ const msg = @import("../message.zig");
 const sse = @import("sse.zig");
 const stream = @import("stream.zig");
 const catalog = @import("../catalog/catalog.zig");
+const json = @import("../schema/json.zig");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
@@ -287,7 +288,10 @@ pub fn onEvent(st: *State, ev: sse.Event, v: std.json.Value, out: *stream.Out) p
         } else {
             // redacted_thinking, server tool blocks, fallback markers, and
             // anything newer: round-trip verbatim (PLAN.md §12).
-            const raw = std.json.Stringify.valueAlloc(out.scratch, cb_v, .{}) catch return error.OutOfMemory;
+            const raw = json.stringifyValueAlloc(out.scratch, cb_v) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.TooDeep => return error.ProtocolError,
+            };
             try b.addOpaque(name, raw);
         }
     } else if (std.mem.eql(u8, kind, "content_block_delta")) {
@@ -330,8 +334,8 @@ pub fn onEvent(st: *State, ev: sse.Event, v: std.json.Value, out: *stream.Out) p
 
 fn mapStop(s: []const u8) msg.FinishReason {
     const map = .{
-        .{ "end_turn", .end_turn },         .{ "tool_use", .tool_use },
-        .{ "max_tokens", .max_tokens },     .{ "model_context_window_exceeded", .max_tokens },
+        .{ "end_turn", .end_turn },           .{ "tool_use", .tool_use },
+        .{ "max_tokens", .max_tokens },       .{ "model_context_window_exceeded", .max_tokens },
         .{ "stop_sequence", .stop_sequence }, .{ "refusal", .refusal },
         .{ "pause_turn", .other },
     };

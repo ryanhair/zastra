@@ -106,6 +106,9 @@ pub const IssueRefund = struct {
         pub const docs = .{ .amount_cents = "Must not exceed the order total" };
     };
     pub const Output = struct { refund_id: []const u8 };
+    /// What the tool can do (§5.12). Agents must `.allow` these, and
+    /// `z.testing.fuzzTool` refuses to fuzz it unless the test opts in.
+    pub const effects = .{ .reads, .writes, .spends_money };
 
     /// Presence of this decl makes the tool approval-gated. Return false to
     /// auto-run. (Or `pub const needs_approval = true;` to always ask.)
@@ -463,6 +466,20 @@ test "schema types round-trip, and lookup survives arbitrary input" {
         const in = try z.testing.arbitrary(LookupOrder.Input, arena.allocator(), prng.random());
         _ = try db.findOrder(arena.allocator(), in.order_id);
     }
+}
+
+test "tools survive arbitrary and hostile arguments" {
+    // Each iteration takes a model tool call's path: arguments JSON, parse,
+    // execute, output. Valid inputs must not crash, leak or produce output
+    // that breaks the schema; mutated arguments must be rejected with a
+    // message before execute sees them. A failure prints its seed.
+    var db = try OrderDb.open(std.testing.allocator, std.testing.io, "");
+    defer db.close();
+    var ctx: Ctx = .{ .db = &db };
+    try z.testing.fuzzTool(App, LookupOrder, .{ .ctx = &ctx, .iterations = 300, .mapped_errors_only = true });
+    // Refunds write and spend money: without `.allow_effects` this is a
+    // compile error.
+    try z.testing.fuzzTool(App, IssueRefund, .{ .ctx = &ctx, .iterations = 300, .allow_effects = .{ .writes, .spends_money } });
 }
 
 test "rt.model's escape hatch can be scripted too" {

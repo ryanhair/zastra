@@ -315,6 +315,16 @@ test "schema types round-trip" {
 
 Strings with a `pattern` get any characters within their length bounds (zastra doesn't enforce `pattern`). Unbounded strings are at most 64 characters and unbounded slices at most 8 items; `z.testing.Gen.init(arena, source, .{ .max_len, .max_items })` changes that. A type that needs values its schema can't describe declares `pub fn arbitrary(gen: *z.testing.Gen) !T` and builds them with `gen.int`, `gen.float`, `gen.string`, `gen.chance`, `gen.index` and `gen.value(Part)`.
 
+### Fuzzing tools
+
+`z.testing.fuzzTool(App, Tool, .{ .ctx = &ctx, .iterations = 300, .seed = 1 })` runs a tool the way a model's tool call does: arguments JSON, parse, `execute`, output. Each iteration tries an arbitrary valid input and a mutated one (wrong types, missing and extra fields, out-of-range numbers, truncated JSON, deep nesting, bad escapes). It fails when:
+- `execute` returns output that doesn't match `Output`'s schema
+- `execute` returns an error outside `ModelErrors`, with `.mapped_errors_only = true`
+- the parser accepts arguments the tool's schema rejects, rejects arguments it accepts, or rejects without a message
+- `execute` panics; the crash prints the seed and the arguments before the stack trace
+
+Leaks show up through the allocators you put in `ctx`: use `std.testing.allocator` there. A failure prints `reproduce with .seed = N, .iterations = 1`. Tools that declare `.writes`, `.network`, `.spends_money` or `.destructive` are a compile error to fuzz until the call lists them in `.allow_effects = .{ ... }`, so a real payment API isn't hit by accident. Other options: `.hostile = false` (valid inputs only), `.gen = .{ .max_len, .max_items }`, `.smith` (inside a `std.testing.fuzz` body) and `.quiet`.
+
 ## 8. Tracing
 
 Every agent run, step, model call, tool call and workflow step is a span. Pass `.tracing` to `App.init`:

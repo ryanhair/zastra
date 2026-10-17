@@ -10,6 +10,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const protocol = @import("protocol.zig");
+const json = @import("../schema/json.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
@@ -225,7 +226,7 @@ pub const Stdio = struct {
                 .request => |r| {
                     // Legacy servers may ask for sampling, roots or
                     // elicitation; zastra declared none of them.
-                    const id_json = std.json.Stringify.valueAlloc(a, r.id, .{}) catch continue;
+                    const id_json = json.stringifyValueAlloc(a, r.id) catch continue;
                     const reply = std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{{\"code\":-32601,\"message\":\"zastra doesn't support {s}\"}}}}", .{ id_json, r.method }) catch continue;
                     c.send(reply) catch {};
                 },

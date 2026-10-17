@@ -56,8 +56,17 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
+    // A test binary that crashes inside z.testing.fuzzTool; fuzz_tool_test
+    // runs it and checks the crash note.
+    const fuzz_crash = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz_crash.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .imports = &.{.{ .name = "zastra", .module = mod }},
+    }) });
     const test_options = b.addOptions();
     test_options.addOptionPath("fake_mcp_server", fake_mcp.getEmittedBin());
+    test_options.addOptionPath("fuzz_crash", fuzz_crash.getEmittedBin());
     const integration = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/integration.zig"),
         .target = target,

@@ -84,3 +84,22 @@ test "fuzz: validated parse never crashes" {
         "{\"category\":\"shipping\",\"urgency\":9,\"summary\":\"y\",\"tags\":[\"a\"]}",
     } });
 }
+
+test "z.Json nested past the stringify limit is a validation issue, not a crash" {
+    const T = struct { j: json.Json };
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const deep = 300;
+    var text: std.ArrayList(u8) = .empty;
+    try text.appendSlice(a, "{\"j\":");
+    try text.appendNTimes(a, '[', deep);
+    try text.appendNTimes(a, ']', deep);
+    try text.append(a, '}');
+    var issue: parse.Issue = .{};
+    try std.testing.expectError(error.ValidationFailed, parse.parse(T, a, text.items, &issue));
+    try std.testing.expectEqualStrings("$.j", issue.path);
+    // At the limit it still works.
+    const ok = "{\"j\":" ++ "[" ** 256 ++ "]" ** 256 ++ "}";
+    _ = try parse.parse(T, a, ok, &issue);
+}

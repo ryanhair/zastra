@@ -12,6 +12,8 @@
 - A test for a crash between a loop body's last save and the loop's progress save.
 - `docs/getting-started.md`: `.max_tokens_field = .max_completion_tokens` for `z.custom` models on OpenAI's Chat Completions endpoint.
 - `z.testing.arbitrary(T, arena, source)`: random values of a schema type that the parser accepts, edge-biased, from a `std.Random` or a `std.testing.Smith`. Types can override generation with `pub fn arbitrary(gen: *z.testing.Gen) !T`. `z.testing.expectRoundTrip(T, .{})` checks that values survive JSON and match the schema (D51).
+- `z.testing.fuzzTool(App, Tool, .{ .ctx, .iterations, .seed })`: runs a tool on arbitrary valid inputs and mutated arguments, checking output schemas, unmapped errors, parser behavior and crashes, with a printed seed to reproduce. Effectful tools need `.allow_effects` (D52).
+- The support example's `IssueRefund` declares `effects = .{ .reads, .writes, .spends_money }`.
 - `h.scriptModel("provider/id", steps)` and `h.model("provider/id")`: script and call `rt.model` under the test harness. `h.requestHeaders()` returns the headers of each model request (D54).
 
 ### Changed
@@ -21,6 +23,8 @@
 
 ### Fixed
 - `[N]u8` fields were written as JSON strings, while the schema and the parser expect an array of integers. They're written as arrays now.
+- JSON nested more than 256 levels deep crashed debug and ReleaseSafe builds (a `std.json.Stringify` assertion). This applied to a `z.Json` field in model output or tool arguments, an Anthropic content block, or an MCP server result, schema or request state. It's now a validation issue or an error result.
+- MCP argument validation compared integer bounds as floating point, so values one past an i64/u64 bound passed.
 - MCP argument validation rejected integers beyond the i64 range (e.g. a large `u64`) as not being integers.
 - `.include_content = true` on JSONL tracing did nothing; model spans now carry the request and response messages.
 - Chat Completions (`openai_compat`): a chunk carrying more than 16 events (reasoning, content and many parallel tool calls) dropped the rest from the event stream. Every event now arrives, in order.

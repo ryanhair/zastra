@@ -98,6 +98,7 @@ pub const testing = struct {
     pub const expectRoundTrip = arb.expectRoundTrip;
     pub const RoundTripOptions = arb.RoundTripOptions;
     pub const roundTrip = arb.roundTrip;
+    pub const fuzzTool = @import("testing/fuzz_tool.zig").fuzzTool;
 };
 pub const ToolResult = @import("agent/events.zig").ToolResult;
 pub const StepFinish = @import("agent/events.zig").StepFinish;

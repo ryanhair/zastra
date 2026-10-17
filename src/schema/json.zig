@@ -111,6 +111,33 @@ pub fn writeStringBody(s: []const u8, w: *Writer) Writer.Error!void {
     try std.json.Stringify.encodeJsonStringChars(s, .{}, w);
 }
 
+/// The deepest nesting `stringifyValueAlloc` writes. `std.json.Stringify`
+/// asserts a depth of at most 256 in safe builds, and `std.json.Value`s from
+/// models and servers can be nested arbitrarily deep.
+pub const max_value_depth = 256;
+
+/// `std.json.Stringify.valueAlloc` for untrusted values: `error.TooDeep`
+/// instead of a panic past `max_value_depth`.
+pub fn stringifyValueAlloc(gpa: std.mem.Allocator, v: std.json.Value) error{ OutOfMemory, TooDeep }![]u8 {
+    if (tooDeep(v, 0)) return error.TooDeep;
+    return std.json.Stringify.valueAlloc(gpa, v, .{}) catch return error.OutOfMemory;
+}
+
+fn tooDeep(v: std.json.Value, depth: usize) bool {
+    switch (v) {
+        .array => |a| {
+            if (depth + 1 > max_value_depth) return true;
+            for (a.items) |item| if (tooDeep(item, depth + 1)) return true;
+        },
+        .object => |o| {
+            if (depth + 1 > max_value_depth) return true;
+            for (o.values()) |item| if (tooDeep(item, depth + 1)) return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
 /// Serialize into a newly allocated slice.
 pub fn stringifyAlloc(gpa: std.mem.Allocator, value: anytype) error{OutOfMemory}![]u8 {
     var aw: Writer.Allocating = .init(gpa);
