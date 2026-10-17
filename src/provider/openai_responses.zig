@@ -17,6 +17,16 @@ const Writer = std.Io.Writer;
 
 pub const name = "openai";
 
+pub const capabilities: p.Capabilities = .{
+    .tool_dialect = .openai,
+    .output_dialect = .openai,
+    .native_output_allows_json = false,
+    .reasoning_on = .effort,
+    .reasoning_off = .effort_none,
+    .budget = false,
+    .temperature_with_reasoning = true,
+};
+
 /// The API rejects `max_output_tokens` below this.
 const min_output_tokens = 16;
 
@@ -67,7 +77,7 @@ fn reasoningJson(comptime modes: catalog.ReasoningModes, comptime effort: ?p.Eff
                 if (e == null and !modes.default_on) e = "medium";
                 summary = o.summarized;
             },
-            .budget => unreachable, // rejected in agent.resolveReasoning
+            .budget => @compileError("OpenAI Responses has no reasoning budget (capabilities.budget = false)"),
         };
         if (e == null and !summary) return "";
         var j: []const u8 = ",\"reasoning\":{";

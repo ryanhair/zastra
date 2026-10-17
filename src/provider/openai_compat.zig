@@ -11,6 +11,17 @@ const Writer = std.Io.Writer;
 
 pub const name = "openai";
 
+pub const capabilities: p.Capabilities = .{
+    .tool_dialect = .openai,
+    .output_dialect = .openai,
+    .native_output_allows_json = false,
+    .reasoning_on = .only_default,
+    .reasoning_off = .unsupported,
+    .budget = false,
+    .temperature_with_reasoning = true,
+    .show_reasoning_hint = " (for a server that streams `reasoning_content`, set `.supports.reasoning_modes.visible = true`)",
+};
+
 const text_index: u32 = 1_000_000;
 const reasoning_index: u32 = 1_000_001;
 

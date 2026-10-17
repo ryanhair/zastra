@@ -13,6 +13,7 @@ const std = @import("std");
 const catalog = @import("../catalog/catalog.zig");
 const msg = @import("../message.zig");
 const Http = @import("http.zig").Http;
+const json_schema = @import("../schema/json_schema.zig");
 const Allocator = std.mem.Allocator;
 
 pub const Message = msg.Message;
@@ -44,6 +45,41 @@ pub const OutputFormat = struct {
 };
 
 pub const Effort = enum { low, medium, high, xhigh, max };
+
+/// What an API can express, declared by each wire module as `capabilities`
+/// (PLAN.md §6.2, D53). What one model accepts is in its catalog entry;
+/// `agent.zig` checks both.
+pub const Capabilities = struct {
+    /// Schema dialects for tool inputs and native structured output (§5.3).
+    tool_dialect: json_schema.Dialect,
+    output_dialect: json_schema.Dialect,
+    /// Native structured output can carry `z.Json` (OpenAI strict mode can't).
+    native_output_allows_json: bool,
+    reasoning_on: ReasoningOn,
+    reasoning_off: ReasoningOff,
+    /// Reasoning takes a token budget (`.reasoning = .{ .budget = N }`).
+    budget: bool,
+    temperature_with_reasoning: bool,
+    /// Appended to the error for `.show_reasoning` on a model without
+    /// readable reasoning.
+    show_reasoning_hint: []const u8 = "",
+
+    pub const ReasoningOn = enum {
+        /// Adaptive thinking, or an explicit budget on models without it.
+        adaptive_or_budget,
+        /// An effort level.
+        effort,
+        /// Only the model's default; it can't be turned on.
+        only_default,
+    };
+    pub const ReasoningOff = enum {
+        /// A "disabled" setting.
+        disabled,
+        /// Effort "none".
+        effort_none,
+        unsupported,
+    };
+};
 
 /// Reasoning settings resolved at comptime from an agent's `.reasoning` and
 /// `.show_reasoning` against the model's capabilities (PLAN.md D37).
@@ -129,6 +165,8 @@ pub const Request = struct {
     system_suffix: ?[]const u8 = null,
     messages: []const Message,
     max_tokens: u32,
+    /// Chat Completions only: servers differ on the name. The other wire
+    /// modules write their API's own field.
     max_tokens_field: catalog.MaxTokensField = .max_tokens,
     tool_choice: ToolChoice = .auto,
     headers: []const [2][]const u8 = &.{},
@@ -306,7 +344,7 @@ pub const W = struct {
 };
 
 /// Comptime JSON string literal (re-exported for providers).
-pub const jsonStr = @import("../schema/json_schema.zig").str;
+pub const jsonStr = json_schema.str;
 
 /// Parse an SSE `data:` payload into a dynamic value.
 pub fn parseData(scratch: Allocator, data: []const u8) Error!std.json.Value {

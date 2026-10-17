@@ -243,13 +243,14 @@ fn cmdModels(out: Out, io: Io, rest: []const []const u8) u8 {
             });
             if (m.supports.reasoning) {
                 const r = m.supports.reasoning_modes;
+                const effort_api = z.provider.Impl(m.api).capabilities.reasoning_on == .effort;
                 out.print("  reasoning: {s} by default; .on={s} .off={s} budget={s} show_reasoning={s}{s}\n", .{
                     if (r.default_on) "on" else "off",
-                    if (r.adaptive) "adaptive" else if (m.api == .openai_responses) "effort" else if (r.default_on) "yes" else "no",
+                    if (r.adaptive) "adaptive" else if (effort_api) "effort" else if (r.default_on) "yes" else "no",
                     if (!r.disable) "no" else if (r.disable_only_up_to_high) "at effort <= high" else "yes",
                     if (r.budget) "yes" else "no",
                     if (!r.visible) "no" else if (r.display_param) "summaries" else "yes",
-                    if (m.api != .openai_responses) "" else if (r.xhigh_effort) "; effort up to xhigh" else "; effort up to high",
+                    if (!effort_api) "" else if (r.xhigh_effort) "; effort up to xhigh" else "; effort up to high",
                 });
             }
         }

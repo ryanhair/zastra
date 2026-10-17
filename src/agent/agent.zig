@@ -47,6 +47,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
         const who = "agent '" ++ agent_name ++ "'";
         if (!@hasField(C, "model")) errors.fail("{s} is missing `.model`, e.g. `.model = \"anthropic/claude-sonnet-5-5\"`", .{who});
         const spec = catalog.resolve(cfg.model, who);
+        const caps = provider.Impl(spec.api).capabilities;
 
         // ── tools ────────────────────────────────────────────────────────
         var user_tools: []const type = &.{};
@@ -99,7 +100,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
                 errors.fail("{s}: model \"{s}\" supports neither structured output nor tool use, so `.output` can't be enforced", .{ who, spec.fullName() });
         }
         const native_output = has_output and spec.supports.structured_output and
-            !(spec.api != .anthropic and json_schema.containsJson(Output_));
+            !(!caps.native_output_allows_json and json_schema.containsJson(Output_));
         const wants_partial = @hasField(C, "partial_output") and blk: {
             if (@TypeOf(cfg.partial_output) != bool) errors.fail("{s}: `.partial_output` must be true or false", .{who});
             break :blk cfg.partial_output;
@@ -175,8 +176,8 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             system = system ++ (if (system.len > 0) "\n\n" else "") ++ "When you have the final answer, call the `" ++ final_answer_tool ++ "` tool with it. Do not answer in plain text.";
 
         // ── tool definitions (comptime, provider dialect) ───────────────
-        const tool_dialect: json_schema.Dialect = if (spec.api == .anthropic) .anthropic else .openai;
-        const output_dialect: json_schema.Dialect = if (spec.api == .anthropic) .anthropic_output else .openai;
+        const tool_dialect = caps.tool_dialect;
+        const output_dialect = caps.output_dialect;
         var defs: []const provider.ToolDef = &.{};
         for (user_tools) |t| defs = defs ++ &[_]provider.ToolDef{.{
             .name = t.name,
@@ -334,9 +335,9 @@ fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime
         const C = @TypeOf(cfg);
         const name = spec.fullName();
         const modes = spec.supports.reasoning_modes;
-        const anthropic = spec.api == .anthropic;
-        // OpenAI Responses: reasoning is an effort level, "none" turns it off.
-        const responses = spec.api == .openai_responses;
+        // What the API can express; `modes` is what this model accepts.
+        const caps = provider.Impl(spec.api).capabilities;
+        const effort_api = caps.reasoning_on == .effort;
 
         const mode: ReasoningMode = if (!@hasField(C, "reasoning")) .default else blk: {
             const R = @TypeOf(cfg.reasoning);
@@ -360,16 +361,16 @@ fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime
                 errors.fail("{s}: set reasoning with `.reasoning` or with `\"thinking\"` in `.provider_options`, not both", .{who});
         }
         if (show and !modes.visible) errors.fail("{s}: model \"{s}\" doesn't return readable reasoning; remove `.show_reasoning`{s}", .{
-            who, name, if (spec.api == .openai_compat) " (for a server that streams `reasoning_content`, set `.supports.reasoning_modes.visible = true`)" else "",
+            who, name, caps.show_reasoning_hint,
         });
 
         const request: ?provider.Reasoning = switch (mode) {
-            .default => if (!show) null else if (!modes.default_on and !(responses and effort != null))
+            .default => if (!show) null else if (!modes.default_on and !(effort_api and effort != null))
                 errors.fail("{s}: model \"{s}\" doesn't reason unless asked; add `.reasoning = .on` to use `.show_reasoning`", .{ who, name })
             else if (modes.display_param) .{ .on = .{ .summarized = true } } else null,
-            .on => if (responses)
+            .on => if (caps.reasoning_on == .effort)
                 .{ .on = .{ .summarized = show and modes.display_param } }
-            else if (!anthropic)
+            else if (caps.reasoning_on == .only_default)
                 (if (modes.default_on) null else errors.fail("{s}: zastra can't turn reasoning on for model \"{s}\"; it reasons by default or not at all", .{ who, name }))
             else if (modes.adaptive) .{ .on = .{ .summarized = show and modes.display_param } }
             else if (modes.budget)
@@ -377,24 +378,24 @@ fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime
             else errors.fail("{s}: zastra can't turn reasoning on for model \"{s}\"", .{ who, name }),
             .off => blk: {
                 if (show) errors.fail("{s}: `.show_reasoning = true` with `.reasoning = .off`; remove one of them", .{who});
-                if (!(anthropic or responses) or !modes.disable)
+                if (caps.reasoning_off == .unsupported or !modes.disable)
                     errors.fail("{s}: model \"{s}\" can't turn reasoning off; remove `.reasoning = .off` (use `.effort = .low` to make it cheaper and faster)", .{ who, name });
                 if (modes.disable_only_up_to_high) if (effort) |e| if (e == .xhigh or e == .max)
                     errors.fail("{s}: model \"{s}\" can only turn reasoning off at effort `high` or below; got `.effort = .{s}`", .{ who, name, @tagName(e) });
-                if (responses and effort != null)
+                if (caps.reasoning_off == .effort_none and effort != null)
                     errors.fail("{s}: `.reasoning = .off` sets OpenAI's reasoning effort to \"none\"; remove `.effort`", .{who});
                 break :blk .disabled;
             },
             .budget => |n| blk: {
-                if (!anthropic or !modes.budget) errors.fail("{s}: model \"{s}\" doesn't take a reasoning budget; use `.reasoning = .on`{s}", .{
-                    who, name, if (anthropic) " (it decides how much to think; `.effort` steers it)" else "",
+                if (!caps.budget or !modes.budget) errors.fail("{s}: model \"{s}\" doesn't take a reasoning budget; use `.reasoning = .on`{s}", .{
+                    who, name, if (caps.budget) " (it decides how much to think; `.effort` steers it)" else "",
                 });
                 if (n < 1024) errors.fail("{s}: `.reasoning = .{{ .budget = {d} }}` is below the minimum of 1024 tokens", .{ who, n });
                 if (n >= max_tokens) errors.fail("{s}: `.reasoning = .{{ .budget = {d} }}` must be less than `.max_tokens` ({d}); the budget counts toward it", .{ who, n, max_tokens });
                 break :blk .{ .budget = n };
             },
         };
-        if (anthropic and temperature != null and (mode == .on or mode == .budget))
+        if (!caps.temperature_with_reasoning and temperature != null and (mode == .on or mode == .budget))
             errors.fail("{s}: `.temperature` can't be combined with reasoning; remove one of them", .{who});
         return .{ .request = request, .show = show };
     }
