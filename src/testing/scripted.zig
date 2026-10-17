@@ -6,10 +6,30 @@ const std = @import("std");
 const json = @import("../schema/json.zig");
 const catalog = @import("../catalog/catalog.zig");
 const agent_mod = @import("../agent/agent.zig");
+const errors = @import("../meta/errors.zig");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
 pub const max_calls_per_step = 8;
+
+/// What `Step` and `render` need, for `rt.model` (`h.scriptModel`): a model
+/// with no tools and no output.
+pub fn RawModel(comptime spec: catalog.Spec) type {
+    return struct {
+        pub const id = @import("../model.zig").Model(spec).tag;
+        pub const model = spec;
+        pub const ToolCall = union(enum) {};
+        pub const tools = .{};
+        pub const Output = void;
+        pub const native_structured_output = true;
+        pub const raw_model = true;
+    };
+}
+
+fn noTools(comptime A: type, comptime what: []const u8) void {
+    if (@hasDecl(A, "raw_model"))
+        errors.fail("h.scriptModel(\"{s}\", ...): rt.model has no tools or output, so `.{s}(...)` can't be scripted; use `.text`, `.withReasoning`, `.chunked` or `.raw`", .{ A.model.fullName(), what });
+}
 
 /// One scripted model turn for agent `A`.
 pub fn Step(comptime A: type) type {
@@ -49,6 +69,7 @@ pub fn Step(comptime A: type) type {
         /// The model calls tool `T` with `input`. The input is typed against
         /// the tool, so a wrong argument fails to compile.
         pub fn tool(comptime T: type, input: T.Input) Self {
+            comptime noTools(A, "tool");
             const name = comptime toolName(T);
             var s: Self = .{ .kind = .{ .calls = .{} } };
             s.kind.calls.buf[0] = @unionInit(A.ToolCall, name, input);
@@ -58,6 +79,7 @@ pub fn Step(comptime A: type) type {
 
         /// Several tool calls in one turn (parallel tool use).
         pub fn tools(calls: []const A.ToolCall) Self {
+            comptime noTools(A, "tools");
             var s: Self = .{ .kind = .{ .calls = .{} } };
             for (calls, 0..) |c, i| s.kind.calls.buf[i] = c;
             s.kind.calls.len = calls.len;
@@ -66,12 +88,14 @@ pub fn Step(comptime A: type) type {
 
         /// The model produces the agent's typed output.
         pub fn output(v: A.Output) Self {
+            comptime noTools(A, "output");
             return .{ .kind = .{ .output_value = v } };
         }
 
         /// The model calls a tool by name with raw JSON arguments, including
         /// zastra's internal tools (`update_working_memory`, `final_answer`).
         pub fn call(name: []const u8, args_json: []const u8) Self {
+            comptime noTools(A, "call");
             return .{ .kind = .{ .raw_call = .{ .name = name, .args_json = args_json } } };
         }
 

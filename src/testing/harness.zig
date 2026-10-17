@@ -11,6 +11,9 @@ const builtin = @import("builtin");
 const http = @import("../provider/http.zig");
 const scripted = @import("scripted.zig");
 const run = @import("../agent/run.zig");
+const catalog = @import("../catalog/catalog.zig");
+const model_mod = @import("../model.zig");
+const msg = @import("../message.zig");
 const Allocator = std.mem.Allocator;
 
 pub const Step = scripted.Step;
@@ -67,6 +70,8 @@ pub fn Harness(comptime AppT: type) type {
         queues: std.StringHashMapUnmanaged(std.ArrayList([]u8)) = .empty,
         turns: usize = 0,
         consumed: std.ArrayList([]u8) = .empty,
+        /// Headers of each model request, oldest first (in `arena`).
+        request_headers: std.ArrayList([]const std.http.Header) = .empty,
 
         pub fn deinit(h: *Self) void {
             h.rt.deinit();
@@ -94,10 +99,22 @@ pub fn Harness(comptime AppT: type) type {
             }
         }
 
+        /// Queue scripted model turns for `rt.model(spec)` (`h.model`),
+        /// consumed in order. Only `.text`, `.withReasoning`, `.chunked` and
+        /// `.raw`: a raw model has no tools or output.
+        pub fn scriptModel(h: *Self, comptime spec: []const u8, steps: []const scripted.Step(scripted.RawModel(catalog.resolve(spec, "h.scriptModel(...)")))) void {
+            h.script(scripted.RawModel(catalog.resolve(spec, "h.scriptModel(...)")), steps);
+        }
+
         /// Scripted turns not yet consumed by agent `A`.
         pub fn remaining(h: *Self, comptime A: type) usize {
             const q = h.queues.get(A.id) orelse return 0;
             return q.items.len;
+        }
+
+        /// Headers sent with each model request, oldest first.
+        pub fn requestHeaders(h: *Self) []const []const std.http.Header {
+            return h.request_headers.items;
         }
 
         /// Request bodies sent so far, oldest first.
@@ -113,12 +130,21 @@ pub fn Harness(comptime AppT: type) type {
             for (headers) |hd| if (std.ascii.eqlIgnoreCase(hd.name, "x-zastra-agent")) {
                 agent_id = hd.value;
             };
+            h.recordHeaders(headers) catch return null;
+            const raw = std.mem.startsWith(u8, agent_id, "model:");
+            const who = if (raw) agent_id["model:".len..] else agent_id;
             const q = h.queues.getPtr(agent_id) orelse {
-                std.debug.print("zastra harness: agent '{s}' made a model request, but nothing is scripted for it (use h.script)\n", .{agent_id});
+                if (raw)
+                    std.debug.print("zastra harness: rt.model(\"{s}\") made a model request, but nothing is scripted for it (use h.scriptModel)\n", .{who})
+                else
+                    std.debug.print("zastra harness: agent '{s}' made a model request, but nothing is scripted for it (use h.script)\n", .{who});
                 return null;
             };
             if (q.items.len == 0) {
-                std.debug.print("zastra harness: agent '{s}' made more model requests than were scripted\n", .{agent_id});
+                if (raw)
+                    std.debug.print("zastra harness: rt.model(\"{s}\") made more model requests than were scripted\n", .{who})
+                else
+                    std.debug.print("zastra harness: agent '{s}' made more model requests than were scripted\n", .{who});
                 return null;
             }
             const b = q.orderedRemove(0);
@@ -126,8 +152,37 @@ pub fn Harness(comptime AppT: type) type {
             return .{ .url_suffix = "", .body = b };
         }
 
+        fn recordHeaders(h: *Self, headers: []const std.http.Header) Allocator.Error!void {
+            const a = h.arena.allocator();
+            const copy = try a.alloc(std.http.Header, headers.len);
+            for (headers, copy) |hd, *c| c.* = .{ .name = try a.dupe(u8, hd.name), .value = try a.dupe(u8, hd.value) };
+            try h.request_headers.append(a, copy);
+        }
+
         pub fn agent(h: *Self, comptime A: type) AgentHandle(A) {
             return .{ .h = h, .inner = h.rt.agent(A) };
+        }
+
+        /// `rt.model(model)`, with results in the harness arena. Script its
+        /// turns with `h.scriptModel`.
+        pub fn model(h: *Self, comptime spec: []const u8) ModelHandle(catalog.resolve(spec, "h.model(...)")) {
+            return .{ .h = h, .inner = h.rt.model(spec) };
+        }
+
+        pub fn ModelHandle(comptime spec: catalog.Spec) type {
+            const M = model_mod.Model(spec);
+            return struct {
+                h: *Self,
+                inner: M,
+
+                pub fn generate(m: @This(), messages: []const msg.Message, opts: M.Options) !M.Result {
+                    return m.inner.generate(m.h.arena.allocator(), messages, opts);
+                }
+
+                pub fn stream(m: @This(), messages: []const msg.Message, opts: M.Options) !*M.Stream {
+                    return m.inner.stream(m.h.arena.allocator(), messages, opts);
+                }
+            };
         }
 
         pub fn workflow(h: *Self, comptime W: type) WorkflowHandle(W) {

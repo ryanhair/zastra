@@ -41,6 +41,53 @@ pub const State = struct {
         return provider.baseUrl(spec, s.env);
     }
 
+    /// The dynamic part of a model request (PLAN.md D54).
+    pub const OpenParts = struct {
+        prefix: provider.Prefix,
+        system_suffix: ?[]const u8 = null,
+        messages: []const provider.Message,
+        max_tokens: u32,
+        /// Routes the request to its scripted turns under the test harness:
+        /// the agent id, or `model:<provider>/<id>` for `rt.model`.
+        tag: []const u8,
+        diag: *provider.Diagnostic,
+    };
+
+    /// Open a model stream for `spec`: the one place a spec becomes a
+    /// provider request, for agents and `rt.model` alike. `who` names the
+    /// caller in the missing-key diagnostic.
+    pub fn openStream(
+        s: *State,
+        comptime spec: catalog.Spec,
+        comptime who: []const u8,
+        arena: Allocator,
+        parts: OpenParts,
+    ) (provider.Error || error{MissingApiKey})!provider.Impl(spec.api).Stream {
+        const key = s.apiKey(spec);
+        if (spec.api_key_env != null and key == null and !s.tag_requests) {
+            parts.diag.print(0, who ++ ": {s} is not set (needed for model {s})", .{ spec.api_key_env.?, comptime spec.fullName() });
+            return error.MissingApiKey;
+        }
+        // Under the harness: the routing tag, plus the spec's own headers.
+        const headers: []const [2][]const u8 = if (s.tag_requests) blk: {
+            const hs = try arena.alloc([2][]const u8, spec.headers.len + 1);
+            hs[0] = .{ "x-zastra-agent", parts.tag };
+            @memcpy(hs[1..], spec.headers);
+            break :blk hs;
+        } else spec.headers;
+        return provider.Impl(spec.api).Stream.open(arena, &s.http, .{
+            .base_url = s.baseUrl(spec),
+            .api_key = key,
+            .prefix = parts.prefix,
+            .system_suffix = parts.system_suffix,
+            .messages = parts.messages,
+            .max_tokens = parts.max_tokens,
+            .max_tokens_field = spec.max_tokens_field,
+            .headers = headers,
+            .diag = parts.diag,
+        });
+    }
+
     pub fn setDiag(s: *State, d: *const provider.Diagnostic) void {
         s.diag_mutex.lockUncancelable(s.io);
         defer s.diag_mutex.unlock(s.io);

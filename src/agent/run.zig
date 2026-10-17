@@ -313,8 +313,6 @@ pub fn Stream(comptime A: type) type {
             final_index: ?u32 = null,
         };
 
-        const tag_headers = [_][2][]const u8{.{ "x-zastra-agent", A.id }};
-
         pub fn init(st: *runtime.State, arena: Allocator, input: []const Message, opts: Options(A)) Allocator.Error!*Self {
             const s = try arena.create(Self);
             s.* = .{
@@ -793,11 +791,6 @@ pub fn Stream(comptime A: type) type {
 
         fn openRequest(s: *Self) Error!void {
             const spec = A.model;
-            const key = s.st.apiKey(spec);
-            if (spec.api_key_env != null and key == null and !s.st.tag_requests) {
-                s.diag.print(0, "agent '{s}': {s} is not set (needed for model {s})", .{ A.id, spec.api_key_env.?, comptime spec.fullName() });
-                return error.MissingApiKey;
-            }
             const max_tokens = s.opts.max_tokens orelse A.max_tokens_default;
             if (A.reasoning_budget) |budget| if (max_tokens <= budget) {
                 s.diag.print(0, "agent '{s}': max_tokens {d} must be greater than the reasoning budget ({d}); the budget counts toward it", .{ A.id, max_tokens, budget });
@@ -817,19 +810,14 @@ pub fn Stream(comptime A: type) type {
             s.model_span.attr("model", comptime spec.fullName());
             s.model_span.attr("prefix_hash", A.prefix_hash);
 
-            const prefix = s.prefix;
-            const req: provider.Request = .{
-                .base_url = s.st.baseUrl(spec),
-                .api_key = key,
-                .prefix = prefix,
+            s.pstream = s.st.openStream(spec, "agent '" ++ A.id ++ "'", s.arena, .{
+                .prefix = s.prefix,
                 .system_suffix = s.system_suffix,
                 .messages = s.messages.items,
                 .max_tokens = max_tokens,
-                .max_tokens_field = spec.max_tokens_field,
-                .headers = if (s.st.tag_requests) &tag_headers else spec.headers,
+                .tag = A.id,
                 .diag = &s.diag,
-            };
-            s.pstream = Impl.Stream.open(s.arena, &s.st.http, req) catch |err| {
+            }) catch |err| {
                 s.model_span.fail(s.diag.message());
                 s.model_span.end();
                 return err;
