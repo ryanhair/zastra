@@ -165,7 +165,8 @@ pub fn resolve(comptime m: anytype, comptime who: []const u8) Spec {
             .max_output = row.max_output,
             .supports = row.supports,
             .pricing = row.pricing,
-            .max_tokens_field = if (info.api == .anthropic) .max_tokens else .max_completion_tokens,
+            // Only Chat Completions reads it; catalog models use the other APIs.
+            .max_tokens_field = .max_completion_tokens,
         };
     }
 }
@@ -194,6 +195,8 @@ pub fn custom(comptime opts: anytype) Spec {
             .openai_responses => "https://api.openai.com/v1",
             .openai_compat => errors.fail("z.custom(...) with `.provider = .openai_compat` needs `.base_url`, e.g. \"https://api.groq.com/openai/v1\"", .{}),
         };
+        if (@hasField(O, "max_tokens_field") and api != .openai_compat)
+            errors.fail("z.custom(...): `.max_tokens_field` only applies to `.provider = .openai_compat`; the {s} API names the field itself, so remove it", .{@tagName(api)});
         var supports: Supports = .{};
         if (@hasField(O, "supports")) {
             reflect.checkConfigFields(@TypeOf(opts.supports), reflect.fieldNames(Supports), "z.custom(...).supports");

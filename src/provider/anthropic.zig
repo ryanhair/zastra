@@ -12,6 +12,16 @@ const Writer = std.Io.Writer;
 pub const name = "anthropic";
 pub const api_version = "2023-06-01";
 
+pub const capabilities: p.Capabilities = .{
+    .tool_dialect = .anthropic,
+    .output_dialect = .anthropic_output,
+    .native_output_allows_json = true,
+    .reasoning_on = .adaptive_or_budget,
+    .reasoning_off = .disabled,
+    .budget = true,
+    .temperature_with_reasoning = false,
+};
+
 /// Comptime request prefix. Key order is fixed so the bytes are stable.
 /// Prompt caching: a breakpoint after the static system prompt (or the last
 /// tool when there is no system prompt), plus top-level automatic caching of
