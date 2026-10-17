@@ -16,6 +16,9 @@ pub fn Model(comptime spec: catalog.Spec) type {
         const Self = @This();
         st: *runtime.State,
 
+        /// Routes requests to `h.scriptModel` turns under the test harness.
+        pub const tag = "model:" ++ spec.fullName();
+
         pub const Options = struct {
             max_tokens: u32 = @min(4096, spec.max_output),
             /// Extra system text (in addition to leading system messages).
@@ -50,21 +53,12 @@ pub fn Model(comptime spec: catalog.Spec) type {
         pub fn stream(m: Self, arena: Allocator, messages: []const msg.Message, opts: Options) (provider.Error || error{MissingApiKey})!*Stream {
             const s = try arena.create(Stream);
             s.* = .{ .inner = undefined, .st = m.st };
-            const key = m.st.apiKey(spec);
-            if (spec.api_key_env != null and key == null and !m.st.tag_requests) {
-                s.diag.print(0, "{s} is not set (needed for model {s})", .{ spec.api_key_env.?, comptime spec.fullName() });
-                m.st.setDiag(&s.diag);
-                return error.MissingApiKey;
-            }
-            s.inner = Impl.Stream.open(arena, &m.st.http, .{
-                .base_url = m.st.baseUrl(spec),
-                .api_key = key,
+            s.inner = m.st.openStream(spec, "rt.model(\"" ++ spec.fullName() ++ "\")", arena, .{
                 .prefix = prefix,
                 .system_suffix = opts.system,
                 .messages = messages,
                 .max_tokens = opts.max_tokens,
-                .max_tokens_field = spec.max_tokens_field,
-                .headers = spec.headers,
+                .tag = tag,
                 .diag = &s.diag,
             }) catch |err| {
                 m.st.setDiag(&s.diag);

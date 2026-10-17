@@ -449,6 +449,16 @@ test "large refunds pause for approval and resume after a restart" {
     try std.testing.expectEqual(1, db.refundCount());
 }
 
+test "rt.model's escape hatch can be scripted too" {
+    var db = OrderDb.fake(&.{});
+    var ctx: Ctx = .{ .db = &db };
+    var h = try z.testing.harness(App, .{ .ctx = &ctx });
+    defer h.deinit();
+    h.scriptModel("anthropic/claude-haiku-4-5", &.{.text("Hi there, nice to meet.")});
+    const r = try h.model("anthropic/claude-haiku-4-5").generate(&.{.user("Say hi in five words.")}, .{ .max_tokens = 32 });
+    try std.testing.expectEqualStrings("Hi there, nice to meet.", r.text);
+}
+
 test "the HTTP status server's tools show up when it's running" {
     var db = OrderDb.fake(&.{});
     var ctx: Ctx = .{ .db = &db };
