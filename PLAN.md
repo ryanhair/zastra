@@ -864,7 +864,7 @@ Rules:
 - **Cassette tests** (`tests/cassettes/`): recorded HTTP/SSE exchanges per provider, replayed through `http.zig`. They are recorded with real keys behind `-Drecord`.
 - **SSE fuzzing**: Zig's built-in fuzzer on `sse.zig`, `schema/parse.zig` and `stream_parse.zig`.
 - **Harness tests** (user-facing):
-  - `z.testing.harness` with `h.script(Agent, steps)`.
+  - `z.testing.harness` with `h.script(Agent, steps)`, and `h.scriptModel("provider/id", steps)` for `rt.model` (through `h.model("provider/id")`).
   - Scripted steps are typed:
     - `.tool(LookupOrder, .{ .order_id = "X" })`
     - `.output(Triage{...})`
@@ -1014,6 +1014,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D51 | `z.testing.arbitrary(T)` | Values valid by construction for `schema.parse`, edge-biased, from `std.Random` or `std.testing.Smith`. `pattern` isn't generated (D27); a type can override with `pub fn arbitrary`. (§19.3) |
 | D52 | `z.testing.fuzzTool` | Valid and hostile inputs along the model's tool-call path. Effectful tools need `.allow_effects` at compile time. Failures print a reproducing seed. (§19.4) |
 | D53 | Provider modules | One shared `stream.SseStream(Wire)` owns the request, error mapping, SSE and JSON parsing and an unbounded event queue. Each API is a wire module supplying `path`, `auth`, `State`, `onEvent` and comptime `capabilities`. `agent.zig` reads the capabilities instead of switching on `spec.api`, and keeps all the error wording (§7). There is no runtime provider vtable: the raw `rt.model` path is comptime too (D15). Rejected: a `resolveReasoning` per wire module, which would scatter §7 wording over four files. (§6.2, §19.0) |
+| D54 | Opening model streams | `runtime.State.openStream` is the only place that turns a spec into a provider request, for the agent loop and `rt.model` alike. Under the harness, requests carry a routing tag (`x-zastra-agent`: the agent id, or `model:<provider>/<id>` for `rt.model`) *plus* the spec's headers. `h.scriptModel` scripts `rt.model`. Spans stay with the callers. (§19.0b) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
@@ -1744,6 +1745,7 @@ v1.1c is the tooling row of §17's table. It ships as **v1.3.0**. One public typ
 | Milestone | Scope | Size |
 |---|---|---|
 | R1 | Provider stream deepening (internal; two compat fixes) | medium |
+| R2 | One way to open a model stream; scripted `rt.model` | small |
 | N12 | OTLP trace exporter | medium |
 | N13 | `dev serve`: the dev CLI over HTTP + SSE | large |
 | N14 | `z.testing.arbitrary(T)` | medium |
@@ -1798,6 +1800,8 @@ The last one becomes simpler after R1.
 **Exit criteria:**
 - All existing tests pass unmodified (cassettes, goldens, compile-fail), plus the new ones.
 - `zig build size`: no budget grows. Record the before and after numbers here.
+- No `spec.api ==` outside `src/provider/` and `src/testing/scripted.zig`.
+- No `unreachable` in a wire module that depends on a check made elsewhere.
 
 **Status: done.** `zig build size` (ReleaseSmall, stripped), before → after:
 
@@ -1808,8 +1812,35 @@ The last one becomes simpler after R1.
 | full | 1,596,808 | 1,598,256 (+1,448) | 3,000,000 |
 
 The growth (0.3% at most) hasn't been broken down by symbol. The size check's symbol patterns now name `provider.stream.SseStream(provider.anthropic)`, and they also check that `provider.openai_responses` is absent from the Anthropic-only App.
-- No `spec.api ==` outside `src/provider/` and `src/testing/scripted.zig`.
-- No `unreachable` in a wire module that depends on a check made elsewhere.
+
+### 19.0b R2: one way to open a model stream (D54)
+
+**Problem.** The agent loop (`agent/run.zig`, `openRequest`) and `rt.model` (`model.zig`, `stream`) each check the API key, resolve the base URL and build a `provider.Request`. The two copies have drifted apart:
+- **Custom headers dropped in tests.** Under the test harness, the agent loop sends only the `x-zastra-agent` routing header and drops `spec.headers` (OpenRouter attribution and the like). No harness test can see them.
+- **`rt.model` can't be scripted.** It sends no routing header, so the harness can't answer it, and no test calls `rt.model` at all.
+- **Different wording for a missing key.** The agent loop prefixes the diagnostic with `agent '<id>':`; `rt.model` has no prefix.
+
+**Design.**
+- `runtime.State.openStream(comptime spec, comptime who, arena, parts) !Impl(spec.api).Stream` handles both callers. `parts` holds the prefix, system suffix, messages, max tokens, routing tag and diagnostic.
+  - It owns the API-key check (skipped under the harness), the base URL, `max_tokens_field`, and the request headers.
+  - Under the harness, the headers are the routing tag *plus* `spec.headers`. The merged list is built only when tagging is on, so production requests still pass `spec.headers` unchanged.
+  - `who` prefixes the missing-key diagnostic: `agent 'support'` (unchanged wording) or `rt.model("anthropic/claude-haiku-4-5")`.
+- **Spans stay with the callers.** The agent loop keeps its `model_call` spans. `rt.model` stays untraced (noted in N12).
+- **Diagnostics are unchanged.** `openStream` writes only the caller's diagnostic. `rt.model` still copies it to the runtime with `setDiag`, and the agent loop keeps its own flow.
+- **`rt.model` gets a routing tag:** `model:<provider>/<id>`. The prefix can't collide with an agent id.
+- **New harness API** (§10):
+  - `h.scriptModel("anthropic/claude-haiku-4-5", &.{ .text("Hi"), .withReasoning("...", .text("...")) })` queues turns for `rt.model`.
+  - `h.model("...")` returns a handle whose `generate`/`stream` use the harness arena, like `h.agent(A)`.
+  - Steps are the same `z.testing.Step` constructors, for a model with no tools and no output. Using `.tool`/`.tools`/`.output` there is a compile error.
+
+**Tests**, all through the harness and the public interface:
+- An agent on a `z.custom` model with `.headers` sends those headers and the routing tag. The harness records the headers of each request.
+- `h.scriptModel` with `h.model(...).generate` returns the scripted text and reasoning on Anthropic and OpenAI Responses.
+- Outside the harness, `rt.model` without its API key gives `error.MissingApiKey` with the new wording.
+- A compile-fail test for `.tool(...)` in `h.scriptModel`.
+- The sketch and the support example gain a test of `h.scriptModel`.
+
+**Exit criteria:** existing tests pass unmodified; no size budget grows.
 
 ### 19.1 N12: OTLP exporter (D49)
 
@@ -1833,7 +1864,7 @@ The growth (0.3% at most) hasn't been broken down by symbol. The size check's sy
 - **Failures never fail a run.** The exporter retries 429/5xx and connection errors twice with backoff (the provider HTTP client's policy), then drops the batch and logs one warning per minute at most.
 - **HTTP:** the runtime's existing client (TLS, CA bundle, timeouts). Nothing new is linked for `https` endpoints.
 - **Ids:** trace ids widen from 64 to 128 bits everywhere: `[32]u8` hex in `GenerateOptions.trace_id` and the span types, the JSONL `trace_id` field, and agent-run snapshots. OTLP and W3C `traceparent` both use 128-bit trace ids, so ids pass through unchanged. Span ids stay 64-bit, as in OTLP. No compatibility path: old 16-character trace ids in JSONL files and snapshots aren't read. `dev trace` reports them as an old format.
-- **Attributes:** the OpenTelemetry GenAI semantic conventions where one exists (`gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.tool.name`, `gen_ai.agent.name`). Everything else stays under `zastra.*` (`zastra.cost_usd`, `zastra.prefix_hash`, `zastra.iteration`). JSONL keeps today's keys. `model_call` and `mcp_call` spans are `SPAN_KIND_CLIENT`; the rest are `INTERNAL`. Failed spans get `STATUS_CODE_ERROR` and the message.
+- **Attributes:** the OpenTelemetry GenAI semantic conventions where one exists (`gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.tool.name`, `gen_ai.agent.name`). Everything else stays under `zastra.*` (`zastra.cost_usd`, `zastra.prefix_hash`, `zastra.iteration`). JSONL keeps today's keys. `model_call` and `mcp_call` spans are `SPAN_KIND_CLIENT`; the rest are `INTERNAL`. Failed spans get `STATUS_CODE_ERROR` and the message. `rt.model` calls make no spans yet (R2 left tracing to the callers); N12 adds a `model_call` root span for them.
 - **Content:** with `.include_content`, prompts and responses go into `gen_ai.input.messages` and `gen_ai.output.messages` as JSON strings. They're off by default, as in JSONL.
 
 **Exit criteria:**
@@ -1944,8 +1975,8 @@ test "lookup_order survives arbitrary input" {
 
 ### 19.6 Order, dependencies and risks
 
-Order: R1, N12, N14, N15, N13.
-- R1 first: it is internal, and it is easier to land before N13 adds new code that streams agent events.
+Order: R1, R2, N12, N14, N15, N13.
+- R1 and R2 first: they are internal (R2 adds two harness methods), and it is easier to land before N13 adds new code that streams agent events.
 - N14 before N15 (fuzzing generates inputs with `arbitrary`).
 - N13 last: it's the largest, and `GET /api/traces` reads the JSONL format, which N12 leaves alone but touches nearby.
 - N12 is independent.
