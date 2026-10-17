@@ -80,7 +80,8 @@ pub fn Options(comptime A: type) type {
         run_id: ?[]const u8 = null,
         /// Parent span (workflows).
         trace_parent: ?*const trace.Span = null,
-        trace_id: ?[16]u8 = null,
+        /// Put the run into an existing trace: 32 lowercase hex characters.
+        trace_id: ?trace.TraceId = null,
         /// Internal (workflow steps, D34): save the run under `run_id` when
         /// it finishes, result included, so a replayed step reuses it
         /// instead of running the agent again.
@@ -266,7 +267,7 @@ pub fn Stream(comptime A: type) type {
         arena: Allocator,
         opts: Options(A),
         run_id: []const u8,
-        trace_id: [16]u8,
+        trace_id: trace.TraceId,
         messages: std.ArrayList(Message) = .empty,
         /// Index of the first message this run added (after loaded history).
         new_from: usize = 0,
@@ -320,7 +321,7 @@ pub fn Stream(comptime A: type) type {
                 .arena = arena,
                 .opts = opts,
                 .run_id = opts.run_id orelse try st.newId(arena, "run"),
-                .trace_id = opts.trace_id orelse st.tracer.newId(),
+                .trace_id = opts.trace_id orelse st.tracer.newTraceId(),
                 .max_steps = opts.max_steps orelse A.max_steps_default,
                 .input = input,
                 .created_at = st.nowMs(),
@@ -451,7 +452,7 @@ pub fn Stream(comptime A: type) type {
                 .working_fingerprint = if (A.has_working_memory) try std.fmt.allocPrint(s.arena, "{x:0>16}", .{A.working_fingerprint}) else null,
                 .thread = s.opts.thread,
                 .resource = s.opts.resource,
-                .trace_id = try std.fmt.allocPrint(s.arena, "{x}", .{s.trace_id[0..]}),
+                .trace_id = try s.arena.dupe(u8, &s.trace_id),
                 .created_at = s.created_at,
                 .keep_result = s.opts.keep_result,
             };
@@ -459,8 +460,8 @@ pub fn Stream(comptime A: type) type {
 
         /// Rebuild a stream from a saved run, waiting at its approvals.
         fn restore(st: *runtime.State, arena: Allocator, run_id: []const u8, snap: Snapshot) Error!*Self {
-            var trace_id: [16]u8 = @splat(0);
-            _ = std.fmt.hexToBytes(&trace_id, snap.trace_id) catch {};
+            // A malformed id gets a new trace rather than failing the resume.
+            const trace_id: ?trace.TraceId = if (snap.trace_id.len == 32) snap.trace_id[0..32].* else null;
             const s = try init(st, arena, &.{}, .{
                 .thread = snap.thread,
                 .resource = snap.resource,
@@ -809,6 +810,7 @@ pub fn Stream(comptime A: type) type {
             s.model_span = s.st.tracer.begin(.model_call, comptime spec.fullName(), s.trace_id, &s.step_span);
             s.model_span.attr("model", comptime spec.fullName());
             s.model_span.attr("prefix_hash", A.prefix_hash);
+            if (s.st.tracer.includeContent()) s.model_span.attr("input_messages", try json.stringifyAlloc(s.arena, s.messages.items));
 
             s.pstream = s.st.openStream(spec, "agent '" ++ A.id ++ "'", s.arena, .{
                 .prefix = s.prefix,
@@ -836,6 +838,7 @@ pub fn Stream(comptime A: type) type {
             s.model_span.attr("cache_read_tokens", usage.cache_read_tokens);
             s.model_span.attr("cost_usd", usage.cost_usd);
             s.model_span.attr("finish_reason", @tagName(f.reason));
+            if (s.st.tracer.includeContent()) s.model_span.attr("output_messages", try json.stringifyAlloc(s.arena, &[_]msg.Message{f.message}));
             s.model_span.end();
 
             try s.messages.append(s.arena, f.message);

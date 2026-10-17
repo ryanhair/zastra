@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+### Breaking changes
+- Trace ids are 128-bit: 32 hex characters (`z.trace.TraceId`) in spans, JSONL, `.trace_id` and saved runs. `dev trace` skips older 16-character ids.
+
 ### Added
+- **OTLP export:** `z.trace.otlp(.{ .endpoint, .headers, .service_name, .include_content })` sends spans as OTLP/HTTP JSON to any OpenTelemetry collector, in batches from a background task, with `OTEL_*` environment defaults and GenAI semantic-convention attribute names (D49).
+- `rt.model` calls are traced as `model_call` spans.
+- `z.testing.harness(App, .{ .tracing = ... })`.
 - A test for a crash between a loop body's last save and the loop's progress save.
 - `docs/getting-started.md`: `.max_tokens_field = .max_completion_tokens` for `z.custom` models on OpenAI's Chat Completions endpoint.
 - `h.scriptModel("provider/id", steps)` and `h.model("provider/id")`: script and call `rt.model` under the test harness. `h.requestHeaders()` returns the headers of each model request (D54).
@@ -13,6 +19,7 @@
 - Provider error responses use one diagnostic format for every API: `"<provider> <status> <type or code>: <message>"`. Anthropic bodies that carry only a `code` now show it.
 
 ### Fixed
+- `.include_content = true` on JSONL tracing did nothing; model spans now carry the request and response messages.
 - Chat Completions (`openai_compat`): a chunk carrying more than 16 events (reasoning, content and many parallel tool calls) dropped the rest from the event stream. Every event now arrives, in order.
 - Under the test harness, agent requests dropped a model's `.headers` (only the routing header was sent).
 - Chat Completions: `tool_call_start` events had an empty id when the server sent none, while the final message used a made-up `call_N`. Both now carry the same id.

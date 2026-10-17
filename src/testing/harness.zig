@@ -28,6 +28,8 @@ pub fn Options(comptime Ctx: type) type {
         /// reopen the same database (a "restart").
         storage_path: []const u8 = ":memory:",
         mcp: @import("../mcp/manager.zig").Options = .{},
+        /// Span export, e.g. `z.trace.otlp(...)` to a local collector.
+        tracing: @import("../trace/trace.zig").Config = .off,
     };
 }
 
@@ -47,6 +49,7 @@ pub fn harness(comptime AppT: type, opts: Options(AppT.Context)) !*Harness(AppT)
         .env = opts.env,
         .storage_path = opts.storage_path,
         .mcp = opts.mcp,
+        .tracing = opts.tracing,
         .testing = .{ .replay = &h.replay, .clock_ms = fakeClock },
     });
     return h;

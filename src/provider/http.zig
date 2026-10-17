@@ -113,6 +113,19 @@ pub const Http = struct {
         return h;
     }
 
+    /// A client for plain `http://` URLs only: no CA certificates are loaded.
+    pub fn initPlain(gpa: Allocator, io: Io, opts: Options, env: ?*const Environ.Map) Http {
+        var h: Http = .{
+            .gpa = gpa,
+            .io = io,
+            .opts = opts,
+            .client = .{ .allocator = gpa, .io = io },
+            .proxy_arena = .init(gpa),
+        };
+        if (env) |e| h.client.initDefaultProxies(h.proxy_arena.allocator(), e) catch {};
+        return h;
+    }
+
     /// A client that serves `replay` instead of touching the network.
     pub fn initReplay(gpa: Allocator, io: Io, replay: *Replay) Http {
         return .{

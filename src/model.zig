@@ -6,6 +6,8 @@ const catalog = @import("catalog/catalog.zig");
 const provider = @import("provider/provider.zig");
 const runtime = @import("runtime.zig");
 const msg = @import("message.zig");
+const trace = @import("trace/trace.zig");
+const json = @import("schema/json.zig");
 const Allocator = std.mem.Allocator;
 
 pub fn Model(comptime spec: catalog.Spec) type {
@@ -36,23 +38,50 @@ pub fn Model(comptime spec: catalog.Spec) type {
             inner: Impl.Stream,
             diag: provider.Diagnostic = .{},
             st: *runtime.State,
+            arena: Allocator,
+            /// A root `model_call` span, ended at `.finish`, on an error, or
+            /// at `deinit` for a stream abandoned early.
+            span: trace.Span,
+            span_open: bool = true,
 
             /// Deltas, then one `.finish`. Delta slices are valid until the next call.
             pub fn next(s: *Stream) provider.Error!?provider.Event {
-                return s.inner.next() catch |err| {
+                const e = s.inner.next() catch |err| {
                     s.st.setDiag(&s.diag);
+                    s.endSpan(s.diag.message());
                     return err;
                 };
+                if (e) |ev| if (ev == .finish) {
+                    const f = ev.finish;
+                    s.span.attr("input_tokens", f.usage.input_tokens);
+                    s.span.attr("output_tokens", f.usage.output_tokens);
+                    s.span.attr("cache_read_tokens", f.usage.cache_read_tokens);
+                    s.span.attr("cost_usd", spec.costUsd(f.usage));
+                    s.span.attr("finish_reason", @tagName(f.reason));
+                    if (s.st.tracer.includeContent()) if (json.stringifyAlloc(s.arena, &[_]msg.Message{f.message})) |out| s.span.attr("output_messages", out) else |_| {};
+                    s.endSpan(null);
+                };
+                return e;
+            }
+
+            fn endSpan(s: *Stream, err: ?[]const u8) void {
+                if (!s.span_open) return;
+                s.span_open = false;
+                if (err) |m| s.span.fail(m);
+                s.span.end();
             }
 
             pub fn deinit(s: *Stream) void {
+                s.endSpan(null);
                 s.inner.close();
             }
         };
 
         pub fn stream(m: Self, arena: Allocator, messages: []const msg.Message, opts: Options) (provider.Error || error{MissingApiKey})!*Stream {
             const s = try arena.create(Stream);
-            s.* = .{ .inner = undefined, .st = m.st };
+            s.* = .{ .inner = undefined, .st = m.st, .arena = arena, .span = m.st.tracer.begin(.model_call, spec.fullName(), m.st.tracer.newTraceId(), null) };
+            s.span.attr("model", comptime spec.fullName());
+            if (m.st.tracer.includeContent()) s.span.attr("input_messages", try json.stringifyAlloc(arena, messages));
             s.inner = m.st.openStream(spec, "rt.model(\"" ++ spec.fullName() ++ "\")", arena, .{
                 .prefix = prefix,
                 .system_suffix = opts.system,
@@ -62,6 +91,7 @@ pub fn Model(comptime spec: catalog.Spec) type {
                 .diag = &s.diag,
             }) catch |err| {
                 m.st.setDiag(&s.diag);
+                s.endSpan(s.diag.message());
                 return err;
             };
             return s;

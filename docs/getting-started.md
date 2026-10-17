@@ -293,7 +293,27 @@ test "refund flow" {
 
 Scripted turns are typed against your tools, so scripting a call with the wrong arguments fails to compile. They are rendered in the real provider wire format, which means the actual parsers and agent loop are exercised.
 
-## 8. The dev CLI and the C library
+## 8. Tracing
+
+Every agent run, step, model call, tool call and workflow step is a span. Pass `.tracing` to `App.init`:
+
+```zig
+.tracing = z.trace.jsonl(file),                     // JSON lines; `zig build dev -- trace <run_id>` prints a tree
+.tracing = z.trace.otlp(.{ .service_name = "support" }), // OTLP/HTTP to an OpenTelemetry collector
+```
+
+`z.trace.otlp` sends OTLP/HTTP with the JSON encoding to `<endpoint>/v1/traces`. That works with the OpenTelemetry Collector, Jaeger, Grafana Tempo, Honeycomb, Langfuse and Phoenix.
+- The endpoint, headers and service name default to `OTEL_EXPORTER_OTLP_ENDPOINT` (then `http://localhost:4318`), `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_SERVICE_NAME`. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is used as is.
+- Explicit headers can come from the environment: `.headers = &.{.{ "x-honeycomb-team", .{ .env = "HONEYCOMB_API_KEY" } }}`.
+- Attributes follow the OpenTelemetry GenAI conventions (`gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.tool.name`, ...); zastra's own are under `zastra.*`.
+- Spans are queued and sent in batches (512 spans or every 2 s) by a background task. `rt.deinit()` sends what's left, waiting up to 5 s. A collector that's down never fails a run: zastra retries twice, then drops the batch with a warning.
+- Prompts and responses are left out unless `.include_content = true`.
+
+To try it locally: `docker run -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one`, set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`, and open http://localhost:16686.
+
+Trace ids are 128-bit (32 hex characters), as in OTLP and W3C `traceparent`. Pass one in with `.trace_id` on `generate`/`stream` to put a run's spans into an existing trace.
+
+## 9. The dev CLI and the C library
 
 ```zig
 const dev = z.addDev(b, .{ .app = app_mod, .zastra = zastra_dep });

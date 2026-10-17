@@ -7,12 +7,22 @@
 const std = @import("std");
 const json = @import("../schema/json.zig");
 const Io = std.Io;
+const Allocator = std.mem.Allocator;
+const otlp_mod = @import("otlp.zig");
+const CaBundle = @import("../provider/http.zig").CaBundle;
+
+/// A 128-bit trace id as lowercase hex, as in OTLP and W3C `traceparent`.
+pub const TraceId = [32]u8;
+/// A 64-bit span id as lowercase hex.
+pub const SpanId = [16]u8;
 
 pub const Kind = enum { agent_run, agent_step, model_call, tool_call, workflow_run, workflow_step, mcp_call };
 
 pub const Config = union(enum) {
     off,
     jsonl: Jsonl,
+    /// From `z.trace.otlp(...)`; started by `App.init`.
+    otlp: Otlp,
 
     pub const Jsonl = struct {
         file: Io.File,
@@ -26,6 +36,35 @@ pub const Config = union(enum) {
 pub fn jsonl(file: Io.File) Config {
     return .{ .jsonl = .{ .file = file } };
 }
+
+pub const OtlpOptions = otlp_mod.Options;
+
+/// `z.trace.otlp(.{ ... })`: OTLP/HTTP export (PLAN.md §19.1). Only this
+/// function references the exporter, so other Apps don't link it.
+pub fn otlp(opts: OtlpOptions) Config {
+    return .{ .otlp = .{ .options = opts, .start = &otlp_mod.start } };
+}
+
+pub const Otlp = struct {
+    options: OtlpOptions,
+    start: *const fn (Allocator, Io, ?*const std.process.Environ.Map, CaBundle, OtlpOptions) StartError!Exporter,
+};
+
+pub const StartError = error{ OutOfMemory, NoCaCertificates, CaBundleInvalid, Canceled };
+
+/// A running exporter (OTLP), owned by the tracer.
+pub const Exporter = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        /// Copy a finished span; must not block on the network.
+        push: *const fn (ptr: *anyopaque, span: *const Span, end_ns: i128) void,
+        includeContent: *const fn (ptr: *anyopaque) bool,
+        /// Send what's queued (bounded in time) and free everything.
+        deinit: *const fn (ptr: *anyopaque) void,
+    };
+};
 
 pub const Attr = struct {
     key: []const u8,
@@ -43,6 +82,8 @@ pub const Attr = struct {
 pub const Tracer = struct {
     io: Io,
     config: Config,
+    /// Set by `App.init` for `.otlp`.
+    exporter: ?Exporter = null,
     mutex: Io.Mutex = .init,
 
     pub fn enabled(t: *const Tracer) bool {
@@ -53,15 +94,22 @@ pub const Tracer = struct {
         return switch (t.config) {
             .off => false,
             .jsonl => |j| j.include_content,
+            .otlp => if (t.exporter) |e| e.vtable.includeContent(e.ptr) else false,
         };
     }
 
-    pub fn newId(t: *Tracer) [16]u8 {
+    /// A new random span id.
+    pub fn newId(t: *Tracer) SpanId {
         var raw: [8]u8 = undefined;
         t.io.random(&raw);
-        var out: [16]u8 = undefined;
-        _ = std.fmt.bufPrint(&out, "{x:0>16}", .{std.mem.readInt(u64, &raw, .little)}) catch unreachable;
-        return out;
+        return std.fmt.bytesToHex(raw, .lower);
+    }
+
+    /// A new random trace id.
+    pub fn newTraceId(t: *Tracer) TraceId {
+        var raw: [16]u8 = undefined;
+        t.io.random(&raw);
+        return std.fmt.bytesToHex(raw, .lower);
     }
 
     pub fn now(t: *Tracer) i128 {
@@ -69,7 +117,7 @@ pub const Tracer = struct {
     }
 
     /// Begin a span. Call `end` exactly once.
-    pub fn begin(t: *Tracer, kind: Kind, name: []const u8, trace_id: [16]u8, parent: ?*const Span) Span {
+    pub fn begin(t: *Tracer, kind: Kind, name: []const u8, trace_id: TraceId, parent: ?*const Span) Span {
         return .{
             .tracer = t,
             .kind = kind,
@@ -86,9 +134,9 @@ pub const Span = struct {
     tracer: *Tracer,
     kind: Kind,
     name: []const u8,
-    trace_id: [16]u8,
-    span_id: [16]u8,
-    parent_id: ?[16]u8,
+    trace_id: TraceId,
+    span_id: SpanId,
+    parent_id: ?SpanId,
     start_ns: i128,
     attrs_buf: [24]Attr = undefined,
     attrs_len: usize = 0,
@@ -116,15 +164,29 @@ pub const Span = struct {
         const cfg = switch (t.config) {
             .off => return,
             .jsonl => |j| j,
+            .otlp => {
+                if (t.exporter) |e| e.vtable.push(e.ptr, s, t.now());
+                return;
+            },
         };
         const end_ns = t.now();
         var buf: [8192]u8 = undefined;
         var w: Io.Writer = .fixed(&buf);
         s.write(&w, end_ns) catch {
-            // Oversized span (long content): drop attributes rather than fail.
+            // Oversized span: drop the content attributes, then all of them,
+            // rather than lose the span.
             w = .fixed(&buf);
-            s.attrs_len = 0;
-            s.write(&w, end_ns) catch return;
+            var n: usize = 0;
+            for (s.attrs_buf[0..s.attrs_len]) |a| if (!std.mem.endsWith(u8, a.key, "_messages")) {
+                s.attrs_buf[n] = a;
+                n += 1;
+            };
+            s.attrs_len = n;
+            s.write(&w, end_ns) catch {
+                w = .fixed(&buf);
+                s.attrs_len = 0;
+                s.write(&w, end_ns) catch return;
+            };
         };
         t.mutex.lockUncancelable(t.io);
         defer t.mutex.unlock(t.io);

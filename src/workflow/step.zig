@@ -219,7 +219,7 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
         state: *runtime.State,
         step_id: []const u8,
         resource: ?[]const u8,
-        trace_id: [16]u8,
+        trace_id: trace.TraceId,
         /// Internal: numbers this step's `w.agent(A).run` calls, for their
         /// saved run ids.
         agent_calls: u32 = 0,

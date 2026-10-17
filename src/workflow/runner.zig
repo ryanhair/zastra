@@ -187,7 +187,7 @@ fn Exec(comptime W: type) type {
         run_id: []const u8,
         resource: ?[]const u8,
         created_at: i64,
-        trace_id: [16]u8 = undefined,
+        trace_id: trace.TraceId = undefined,
         run_span: trace.Span = undefined,
         suspended: ?W.Suspended = null,
         suspended_at: []const u8 = "",
@@ -198,7 +198,7 @@ fn Exec(comptime W: type) type {
         iteration: []const u8 = "",
 
         fn run(x: *X) Error!W.Result {
-            x.trace_id = x.st.tracer.newId();
+            x.trace_id = x.st.tracer.newTraceId();
             x.run_span = x.st.tracer.begin(.workflow_run, W.id, x.trace_id, null);
             x.run_span.attr("workflow", W.id);
             x.run_span.attr("run_id", x.run_id);

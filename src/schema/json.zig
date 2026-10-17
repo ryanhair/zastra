@@ -104,6 +104,11 @@ pub fn writeString(s: []const u8, w: *Writer) Writer.Error!void {
     try std.json.Stringify.encodeJsonString(s, .{}, w);
 }
 
+/// Like `writeString`, without the quotes.
+pub fn writeStringBody(s: []const u8, w: *Writer) Writer.Error!void {
+    try std.json.Stringify.encodeJsonStringChars(s, .{}, w);
+}
+
 /// Serialize into a newly allocated slice.
 pub fn stringifyAlloc(gpa: std.mem.Allocator, value: anytype) error{OutOfMemory}![]u8 {
     var aw: Writer.Allocating = .init(gpa);

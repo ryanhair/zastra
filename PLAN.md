@@ -1009,7 +1009,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D46 | Loop state and ids | The slot holds `{ iter, value }`. Body slots are cleared each iteration, in the same save that advances `iter`. Saved agent-run ids get `@<iter>`. The default agent thread doesn't, so loops keep their history. Steps after the loop can't need body steps. (§18.3) |
 | D47 | Parallel failure | The first branch failure cancels its siblings. The step reports the earliest real failure in time (v1: first in declaration order, after all finished). Branches no longer share the run's failure state or diagnostic. (§18.1) |
 | D48 | Working-memory migrations | Typed: `pub const migrations = .{ z.migrate(Old, f) }` on the working-memory type, checked as a chain at comptime. A failing migration fails the run. No match still resets, with a better warning. Also applied when restoring saved agent runs. (§18.2) |
-| D49 | OTLP exporter | OTLP/HTTP with JSON encoding, no protobuf or gRPC. Referenced through a vtable from `z.trace.otlp` only, so other Apps link none of it. Bounded queue and a background sender; export failures never fail runs. Trace ids widen to 128 bits everywhere, with no compatibility path (no outside users yet). GenAI semantic-convention attribute names. (§19.1) |
+| D49 | OTLP exporter | OTLP/HTTP with JSON encoding, no protobuf or gRPC. Referenced through a vtable from `z.trace.otlp` only, so other Apps link none of it. Its own HTTP client. Bounded queue and a background sender; export failures never fail runs. Trace ids widen to 128 bits everywhere, with no compatibility path (no outside users yet). GenAI semantic-convention attribute names. (§19.1) |
 | D50 | `dev serve` | A library function (`z.dev.serve`) behind the dev CLI. SSE events use the C ABI's event JSON. Approvals suspend the run and close the stream; clients resume over a new request. Loopback by default, `Host`/`Origin` checks, a bearer token required off loopback. (§19.2) |
 | D51 | `z.testing.arbitrary(T)` | Values valid by construction for `schema.parse`, edge-biased, from `std.Random` or `std.testing.Smith`. `pattern` isn't generated (D27); a type can override with `pub fn arbitrary`. (§19.3) |
 | D52 | `z.testing.fuzzTool` | Valid and hostile inputs along the model's tool-call path. Effectful tools need `.allow_effects` at compile time. Failures print a reproducing seed. (§19.4) |
@@ -1873,6 +1873,23 @@ The growth (0.3% at most) hasn't been broken down by symbol. The size check's sy
 - Trace ids: a test that every span of a run, the JSONL line and the agent-run snapshot carry the same 32-character id.
 - Live: the support example exporting to a local Jaeger (`jaegertracing/all-in-one`, OTLP on 4318). The span tree, GenAI attributes and errors show up in the UI.
 - Docs: a tracing section in `docs/getting-started.md`; the sketch's `.tracing` comment becomes real code.
+
+**Implemented (N12, 2026-10-17):**
+- `src/trace/otlp.zig`. `trace.Config` gains `.otlp`, holding the options and a pointer to `start`; only `z.trace.otlp` takes that pointer. `App.init` starts the exporter and `rt.deinit()` stops it first.
+- **Changes from the design above:**
+  - The exporter has its **own HTTP client**, not the runtime's: under the test harness the runtime's client replays scripted responses, and a separate client keeps the exporter's retries and 10 s timeout apart from model calls. It loads CA certificates only for `https://` endpoints (new `Http.initPlain`), using the App's `ca_bundle`.
+  - The default service name is `OTEL_SERVICE_NAME`, then `"zastra"`: Apps have no name.
+  - Shutdown: `rt.deinit()` wakes the sender, waits up to `shutdown_timeout_ms` for its final flush, then cancels it. Without concurrency, a full batch is sent from `Span.end` and the rest at `rt.deinit()`; there's no time-based flush.
+  - The batch size, interval, queue size, timeouts and retries are options (tests use small values).
+  - `finish_reason` becomes `gen_ai.response.finish_reasons` (an array). Span names are `<operation> <name>`: `invoke_agent support`, `chat anthropic/claude-sonnet-4-6`, `execute_tool lookup_order`; spans without a GenAI operation use their kind (`workflow_run classify_ticket`).
+- **`include_content` now works.** It was declared on `.jsonl` but nothing read it. Model spans (agent and `rt.model`) get `input_messages` and `output_messages` (`gen_ai.input.messages`/`gen_ai.output.messages` in OTLP). A JSONL span too big for its 8 KB line drops these first, then the other attributes.
+- **`rt.model`** calls get a root `model_call` span: model, tokens, cost, finish reason, and the error message on failure.
+- **Trace ids** are `trace.TraceId` (`[32]u8`), span ids `trace.SpanId` (`[16]u8`). Snapshots store the id as is. `dev trace` skips 16-character ids and says how many it skipped.
+- Harness: `.tracing` option.
+- Tests (`tests/otlp_test.zig`, `tests/fake_otlp.zig`): the body for an agent run with a tool call (golden `tests/golden/otlp/agent_run.json`, ids and times normalized; nothing sent before `rt.deinit()`), batching by count and by time, the queue dropping the oldest spans, a 503 retried once and dropped while the run succeeds, `OTEL_*` defaults including a percent-encoded header, explicit and env headers, the inline path with concurrency disabled, content (agent and `rt.model`), and one trace id across spans, JSONL and a suspended run's snapshot, before and after its resume.
+- **Size** (`zig build size`): anthropic_memory 658,664 → 662,200 B (+3,536). 672 B are the wider ids and exporter dispatch; 2,864 B are content serialization, linked whenever tracing could be on, since the tracing config is a runtime value. Using `.otlp` adds 13,440 B (675,640 B).
+- **Live (2026-10-17):** a local Jaeger (`jaegertracing/all-in-one`, under Colima) received a scripted agent run with a tool call, a run whose tool failed, a workflow and an `rt.model` call: one trace each, nesting and span kinds correct, GenAI attributes and content present, failed spans marked as errors with the message. Not yet run with real provider calls (no keys at the time); the export path doesn't depend on them.
+- Not in the C ABI: its config JSON still takes only `"trace": "<path>"`. Adding OTLP there would link the exporter into every C library.
 
 ### 19.2 N13: `dev serve` (D50)
 

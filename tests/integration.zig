@@ -9,4 +9,5 @@ test {
     _ = @import("workflow_test.zig");
     _ = @import("workflow_approval_test.zig");
     _ = @import("workflow_loop_test.zig");
+    _ = @import("otlp_test.zig");
 }

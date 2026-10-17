@@ -215,6 +215,17 @@ pub fn App(comptime cfg: anytype) type {
                 }
                 errdefer st.http.deinit();
 
+                if (opts.tracing == .otlp) {
+                    const o = opts.tracing.otlp;
+                    st.tracer.exporter = o.start(gpa, io, opts.env, opts.ca_bundle, o.options) catch |err| {
+                        if (err == error.NoCaCertificates) st.diag.set(0, "OTLP exporter: no CA certificates found in the system store");
+                        if (err == error.CaBundleInvalid) st.diag.set(0, "OTLP exporter: the CA bundle given to App.init couldn't be parsed");
+                        lastInitDiag().* = st.diag;
+                        return err;
+                    };
+                }
+                errdefer if (st.tracer.exporter) |e| e.vtable.deinit(e.ptr);
+
                 const backend = try gpa.create(Backend);
                 errdefer gpa.destroy(backend);
                 backend.* = Backend.open(gpa, io, opts.storage_path) catch |err| {
@@ -282,6 +293,8 @@ fn RuntimeOf(comptime AppT: type) type {
 
         pub fn deinit(rt: *Self) void {
             const gpa = rt.st.gpa;
+            // First: the last batch goes out while the runtime is intact.
+            if (rt.st.tracer.exporter) |e| e.vtable.deinit(e.ptr);
             if (AppT.mcp_servers.len > 0) if (rt.st.mcp) |m| {
                 @as(*AppT.McpManager, @ptrCast(@alignCast(m))).stop();
             };

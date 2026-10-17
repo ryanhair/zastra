@@ -26,7 +26,10 @@ pub fn main(init: std.process.Init) !void {
         .ctx = &ctx,
         .env = init.environ_map,
         .storage_path = "zastra.sqlite", // backend is chosen in z.App (comptime)
-        .tracing = z.trace.jsonl(std.Io.File.stderr()), // or .otlp(url), or .off
+        // JSON lines, or OTLP/HTTP to any OpenTelemetry collector:
+        //   z.trace.otlp(.{ .endpoint = "http://localhost:4318", .service_name = "support" })
+        // (endpoint, headers and service name default to the OTEL_* env vars).
+        .tracing = z.trace.jsonl(std.Io.File.stderr()), // or .off
         // CA certificates are loaded here, not on the first request. `.system`
         // is the default; embed a PEM for `FROM scratch` containers.
         .ca_bundle = .system, // or .{ .pem = @embedFile("cacert.pem") }

@@ -288,15 +288,22 @@ fn cmdTrace(out: Out, io: Io, arena: Allocator, rest: []const []const u8) u8 {
     };
     var spans: std.ArrayList(Span) = .empty;
     var traces: std.StringHashMapUnmanaged(void) = .empty;
+    var old: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         const s = std.json.parseFromSliceLeaky(Span, arena, line, .{ .ignore_unknown_fields = true }) catch continue;
+        // Before v1.3.0, trace ids were 64-bit (16 hex characters).
+        if (s.trace_id.len != 32) {
+            old += 1;
+            continue;
+        }
         spans.append(arena, s) catch return 1;
         if (s.attrs == .object) if (s.attrs.object.get("run_id")) |rid| if (rid == .string and std.mem.eql(u8, rid.string, rest[0])) {
             traces.put(arena, s.trace_id, {}) catch return 1;
         };
     }
+    if (old > 0) out.print("skipped {d} spans in an older format (64-bit trace ids, before zastra v1.3.0)\n", .{old});
     if (traces.count() == 0) {
         out.print("no spans for run '{s}' in {s}\n", .{ rest[0], trace_file });
         return 1;
