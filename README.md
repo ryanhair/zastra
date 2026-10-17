@@ -32,7 +32,7 @@ while (try stream.next()) |event| switch (event) {
 - **Agents.** `generate` and `stream`, a multi-step tool loop with parallel tool calls, typed structured output (native JSON-schema mode or a `final_answer` tool, with one repair attempt), reasoning control checked per model (`.reasoning`, `.show_reasoning`), human approval, and memory: history plus typed working memory.
 - **Workflows.** `.then`, `.branch`, `z.step.parallel`, nested workflows, typed `needs`, retries and timeouts, plus suspend/resume that survives restarts. A structural fingerprint catches incompatible snapshots, and `.migration(...)` handles old ones.
 - **MCP client** over stdio and Streamable HTTP, for the 2026-07-28 protocol and older `initialize`-based servers alike. Tool lists refresh when a server changes them, and arguments are validated against each server's schema.
-- **Tracing** as JSON lines, and a dev CLI that prints a run as a tree.
+- **Tracing** as JSON lines or OTLP, and a dev CLI that prints a run as a tree and serves the App over HTTP.
 - **Size follows usage.** There are no feature flags. An Anthropic-only app with memory storage is about 650 KB, static, for aarch64-linux-musl. The full support example, with both providers, SQLite, MCP and workflows, is about 1.6 MB.
 - **One App, many outputs:** your program, a dev CLI (`z.addDev`), and a C library with a generated header (`z.addCLib`). The C API pulls events from a stream, so it works well over FFI from Swift, Dart and Python.
 - **A test harness** with scripted models that are typed against your tools. It needs no network.

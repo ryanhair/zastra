@@ -1931,6 +1931,18 @@ The growth (0.3% at most) hasn't been broken down by symbol. The size check's sy
 - Live: the support example, `curl -N` streaming a chat with an approval, then resuming it.
 - App binaries don't change size; `dev serve` lives only in the dev binary.
 
+**Implemented (2026-10-17).**
+- `src/dev/serve.zig`: `z.dev.serve(App, &rt, opts)` and `z.dev.Server(App)` (`init`, `start`, `port`, `acceptLoop`, `deinit`). The dev CLI's `serve` command takes `--port`, `--host`, `--token-env`, `--allow-origin` and the global `--db`; the trace file is the CLI's `zastra-trace.jsonl`.
+- **One encoding.** The C ABI's result and event JSON moved to `capi/encode.zig`, used by both. The manifest now has per-agent and per-workflow JSON (`manifest.agentJson`, `workflowJson`) and lists tool `effects`, so `GET /api/agents` and the manifest are the same objects.
+- **Stream ends.** After `finish` a stream sends `result` (the C library's `result()` JSON). A failure sends `error` with the error JSON. An approval sends `suspended` (`suspendedJson`).
+- **Resume decisions** are an array, as in the C ABI. Workflow resume takes `{value, step?}`; `step` is only checked against where the run is suspended.
+- **Workflow cancel** marks a suspended run `canceled` through `claimRun`. There's no workflow cancel API in the runtime; agent runs use `cancelRun`.
+- **Responses before the body is read** (security rejections, 413) close the connection. `std.http.Server.respond` would otherwise read the whole body to keep the connection alive.
+- **Disconnect detection** happens at the next event write, so a run blocked in a long model call or tool notices when that returns.
+- **Shared diagnostic.** Error messages use `rt.lastDiagnostic()`, which is shared by the runtime, so concurrent failures can mix messages. Streams use their own diagnostic.
+- **Tests.** `tests/dev_serve_test.zig` covers every endpoint, SSE with tool, partial-output and multi-line text events, suspend then resume/stream, a concurrent request while a stream is blocked in a tool, a client disconnecting (the rest of its script isn't consumed), and each security rule. `tests/golden/dev_serve/session.txt` pins every response shape, with volatile ids and times scrubbed; refresh it with `ZASTRA_UPDATE_GOLDEN=1 zig build test`. `tests/dev_serve_smoke.sh` runs in CI on Linux and macOS.
+- **Live check still open:** `curl -N` against the support example with real keys, an approval, then a resume. It needs API keys and is part of N16.
+
 ### 19.3 N14: `z.testing.arbitrary(T)` (D51)
 
 **Problem.** Tests hand-write tool inputs and outputs. Edge cases (empty strings, boundary numbers, unicode, missing optionals) are only tested if someone thinks of them.

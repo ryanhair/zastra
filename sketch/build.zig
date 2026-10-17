@@ -57,8 +57,9 @@ pub fn build(b: *std.Build) void {
     //      zig build dev -- resume <run_id> @r.json     resume one
     //      zig build dev -- trace <run_id>              pretty-print a trace tree
     //
-    //    Studio-lite (v1.1): `dev serve` exposes the same commands over a tiny HTTP+SSE
-    //    API, so a web UI can be layered on later without changing the App.
+    //      zig build dev -- serve --port 4111           the same over HTTP + SSE
+    //        (127.0.0.1 only unless --token-env; see docs/dev-serve.md). A web UI or
+    //        a script in any language can drive the App without changing it.
     const dev = z.addDev(b, .{ .app = app_mod, .zastra = zastra_dep });
     const dev_step = b.step("dev", "Run the zastra dev CLI against this App");
     dev_step.dependOn(&dev.run.step);

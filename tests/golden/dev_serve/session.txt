@@ -1,0 +1,114 @@
+### GET /api/agents/refunder
+200
+{"id":"refunder","model":"anthropic/claude-sonnet-4-6","prefix_hash":_,"tools":[{"name":"lookup_order","description":"Look up an order by its ID.","approval":"never","effects":["reads"],"input_schema":{"type":"object","properties":{"order_id":{"type":"string"}},"required":["order_id"],"additionalProperties":false},"output_schema":{"type":"object","properties":{"id":{"type":"string"},"total_cents":{"type":"integer","minimum":0,"maximum":4294967295}},"required":["id","total_cents"],"additionalProperties":false}},{"name":"issue_refund","description":"Refund an order.","approval":"always","effects":["reads","writes","spends_money"],"input_schema":{"type":"object","properties":{"order_id":{"type":"string"},"amount_cents":{"type":"integer","minimum":0,"maximum":4294967295}},"required":["order_id","amount_cents"],"additionalProperties":false},"output_schema":{"type":"object","properties":{"refund_id":{"type":"string"}},"required":["refund_id"],"additionalProperties":false}}],"mcp_servers":[]}
+
+### GET /api/workflows
+200
+[{"id":"refund_flow","fingerprint":"0x658c6068e1cfdf3b","input_schema":{"type":"object","properties":{"order_id":{"type":"string"},"cents":{"type":"integer","minimum":0,"maximum":4294967295}},"required":["order_id","cents"],"additionalProperties":false},"output_schema":{"type":"object","properties":{"refunded":{"type":"boolean"},"by":{"type":"string"}},"required":["refunded","by"],"additionalProperties":false},"suspendable":[{"step":"approve","suspend_schema":{"type":"object","properties":{"order_id":{"type":"string"}},"required":["order_id"],"additionalProperties":false},"resume_schema":{"type":"object","properties":{"approved":{"type":"boolean"},"by":{"type":"string"}},"required":["approved","by"],"additionalProperties":false}}]}]
+
+### GET /api/workflows/refund_flow/graph
+200
+{"id":"refund_flow","mermaid":"flowchart TD\n    start([refund_flow])\n    approve[[approve ⏸]]\n    start --> approve\n    approve --> finish([end])\n"}
+
+### GET /api/models
+200
+[{"model":"anthropic/claude-sonnet-4-6","context_window":1000000,"max_output":128000,"pricing":{"input":3,"output":15,"cache_read":0.3,"cache_write":3.75},"supports":{"tools":true,"structured_output":true,"vision":true,"reasoning":true,"prompt_caching":true}}]
+
+### POST /api/agents/refunder/generate {"input":"ORD-1?"}
+200
+{"status":"completed","text":"It's $90.","steps":2,"finish_reason":"end_turn","run_id":"run_X","usage":{"input_tokens":20,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00020999999999999998}}
+
+### POST /api/agents/reporter/stream {"input":"Summarize."}
+200
+event: text_delta
+data: {"summary":"Short.","score":3}
+
+event: output_partial
+data: {"summary":"Short.","score":3}
+
+event: step_finish
+data: {"index":0,"reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00010499999999999999}}
+
+event: finish
+data: {"reason":"end_turn","steps":1,"usage":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00010499999999999999}}
+
+event: result
+data: {"status":"completed","text":"{\"summary\":\"Short.\",\"score\":3}","output":{"summary":"Short.","score":3},"steps":1,"finish_reason":"end_turn","run_id":"run_X","usage":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00010499999999999999}}
+
+
+
+### POST /api/agents/refunder/stream {"input":"Refund ORD-1."}
+200
+event: tool_call
+data: {"type":"issue_refund","order_id":"ORD-1","amount_cents":9000}
+
+event: approval_request
+data: {"id":"toolu_scripted_4_0","call":{"type":"issue_refund","order_id":"ORD-1","amount_cents":9000}}
+
+event: suspended
+data: {"status":"suspended","run_id":"run_X","requests":[{"id":"toolu_scripted_4_0","tool":"issue_refund","input":{"order_id":"ORD-1","amount_cents":9000}}]}
+
+
+
+### GET /api/runs?kind=agent
+200
+[{"run_id":"run_X","kind":"agent","owner_id":"refunder","status":"suspended","suspended_at":"approval","resumable":true,"created_at":_,"updated_at":_}]
+
+### GET /api/runs/run_X
+200
+{"run_id":"run_X","kind":"agent","owner_id":"refunder","status":"suspended","suspended_at":"approval","resumable":true,"created_at":_,"updated_at":_,"state":{"version":1,"prefix_hash":_,"tools":[{"name":"lookup_order","hash":"4726843cc53deb58"},{"name":"issue_refund","hash":"dce70d64a41ec373"}],"messages":[{"role":"user","content":{"type":"text","value":"Refund ORD-1."}},{"role":"assistant","content":{"type":"blocks","value":[{"type":"tool_use","id":"toolu_scripted_4_0","name":"issue_refund","input_json":"{\"order_id\":\"ORD-1\",\"amount_cents\":9000}"}]}}],"new_from":0,"calls":[{"id":"toolu_scripted_4_0","approval":"pending","deny_reason":""}],"step":0,"max_steps":10,"usage":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00010499999999999999},"step_usage":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00010499999999999999},"repair_used":false,"working_dirty":false,"trace_id":_,"created_at":_,"keep_result":false,"core_hash":"aab3cfa8c4e663a0"}}
+
+### POST /api/runs/run_X/resume {"decisions":[{"id":"toolu_scripted_4_0","approve":true}]}
+200
+{"status":"completed","text":"Refunded.","steps":2,"finish_reason":"end_turn","run_id":"run_X","usage":{"input_tokens":20,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00020999999999999998}}
+
+### POST /api/workflows/refund_flow/start {"input":{"order_id":"A","cents":5}}
+200
+{"status":"suspended","run_id":"wfrun_X","at":"approve","payload":{"order_id":"A"}}
+
+### POST /api/runs/wfrun_X/resume {"value":{"approved":true,"by":"ryan"}}
+200
+{"status":"completed","output":{"refunded":true,"by":"ryan"}}
+
+### POST /api/workflows/refund_flow/start {"input":{"order_id":"B","cents":5}}
+200
+{"status":"suspended","run_id":"wfrun_X","at":"approve","payload":{"order_id":"B"}}
+
+### POST /api/runs/wfrun_X/cancel 
+200
+{"status":"canceled"}
+
+### POST /api/runs/run_X/resume/stream {"decisions":[{"id":"toolu_scripted_6_0","deny":"Too much."}]}
+200
+event: tool_result
+data: {"id":"toolu_scripted_6_0","tool":"issue_refund","content":"The user denied this tool call: Too much.","is_error":true,"elapsed_ms":_}
+
+event: step_finish
+data: {"index":0,"reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00010499999999999999}}
+
+event: text_delta
+data: Done.
+
+event: step_finish
+data: {"index":1,"reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00010499999999999999}}
+
+event: finish
+data: {"reason":"end_turn","steps":2,"usage":{"input_tokens":20,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00020999999999999998}}
+
+event: result
+data: {"status":"completed","text":"Done.","steps":2,"finish_reason":"end_turn","run_id":"run_X","usage":{"input_tokens":20,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":0.00020999999999999998}}
+
+
+
+### GET /api/traces/run_X
+200
+[{"trace_id":_,"span_id":_,"parent_id":_,"name":"anthropic/claude-sonnet-4-6","kind":"model_call","start_ns":_,"end_ns":_,"status":"ok","attrs":{"model":"anthropic/claude-sonnet-4-6","prefix_hash":_,"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cost_usd":0.00010499999999999999,"finish_reason":"tool_use"}},{"trace_id":_,"span_id":_,"parent_id":_,"name":"refunder","kind":"agent_step","start_ns":_,"end_ns":_,"status":"ok","attrs":{"step":0,"suspended":true}},{"trace_id":_,"span_id":_,"parent_id":_null,"name":"refunder","kind":"agent_run","start_ns":_,"end_ns":_,"status":"ok","attrs":{"agent":"refunder","run_id":"run_X","model":"anthropic/claude-sonnet-4-6","suspended":true,"steps":0}},{"trace_id":_,"span_id":_,"parent_id":_,"name":"refunder","kind":"agent_step","start_ns":_,"end_ns":_,"status":"ok","attrs":{"step":0,"resumed":true}},{"trace_id":_,"span_id":_,"parent_id":_,"name":"anthropic/claude-sonnet-4-6","kind":"model_call","start_ns":_,"end_ns":_,"status":"ok","attrs":{"model":"anthropic/claude-sonnet-4-6","prefix_hash":_,"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cost_usd":0.00010499999999999999,"finish_reason":"end_turn"}},{"trace_id":_,"span_id":_,"parent_id":_,"name":"refunder","kind":"agent_step","start_ns":_,"end_ns":_,"status":"ok","attrs":{"step":1}},{"trace_id":_,"span_id":_,"parent_id":_null,"name":"refunder","kind":"agent_run","start_ns":_,"end_ns":_,"status":"ok","attrs":{"agent":"refunder","run_id":"run_X","model":"anthropic/claude-sonnet-4-6","resumed":true,"steps":2,"input_tokens":20,"output_tokens":10,"cost_usd":0.00020999999999999998,"finish_reason":"end_turn"}}]
+
+### POST /api/agents/refunder/generate {"input":7}
+400
+{"error":{"code":"InvalidInput","message":"`input` must be a string or an array of messages"}}
+
+### GET /api/runs/nope
+404
+{"error":{"code":"RunNotFound","message":"no run 'nope'"}}
+

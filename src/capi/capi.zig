@@ -13,6 +13,11 @@ const manifest = @import("manifest.zig");
 const header = @import("header.zig");
 const runner = @import("../workflow/runner.zig");
 const step = @import("../workflow/step.zig");
+const encode = @import("encode.zig");
+const runResultJson = encode.runResultJson;
+const suspendedJson = encode.suspendedJson;
+const agentResultJson = encode.agentResultJson;
+const workflowResultJson = encode.workflowResultJson;
 const Allocator = std.mem.Allocator;
 
 const Status = enum(c_int) {
@@ -245,55 +250,6 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
             };
         }
 
-        /// `{"status":"completed",...}` or, for gated agents,
-        /// `{"status":"suspended","run_id":...,"requests":[{"id","tool","input"}]}`.
-        fn runResultJson(comptime A: type, arena: Allocator, r: run.Result(A)) ![]const u8 {
-            if (comptime !A.has_approvals) return agentResultJson(A, arena, r);
-            return switch (r) {
-                .completed => |c| agentResultJson(A, arena, c),
-                .suspended => |su| suspendedJson(A, arena, su),
-            };
-        }
-
-        fn suspendedJson(comptime A: type, arena: Allocator, su: run.Suspended(A)) ![]const u8 {
-            var aw: std.Io.Writer.Allocating = .init(arena);
-            const w = &aw.writer;
-            try w.writeAll("{\"status\":\"suspended\",\"run_id\":");
-            try json.writeString(su.run_id, w);
-            try w.writeAll(",\"requests\":[");
-            for (su.requests, 0..) |req, i| {
-                if (i > 0) try w.writeByte(',');
-                try w.writeAll("{\"id\":");
-                try json.writeString(req.id, w);
-                switch (req.call) {
-                    inline else => |input, tag| {
-                        try w.print(",\"tool\":\"{s}\",\"input\":", .{@tagName(tag)});
-                        try json.write(input, w);
-                    },
-                }
-                try w.writeByte('}');
-            }
-            try w.writeAll("]}");
-            return aw.written();
-        }
-
-        fn agentResultJson(comptime A: type, arena: Allocator, r: run.GenerateResult(A)) ![]const u8 {
-            var aw: std.Io.Writer.Allocating = .init(arena);
-            const w = &aw.writer;
-            try w.writeAll("{\"status\":\"completed\",\"text\":");
-            try json.writeString(r.text, w);
-            if (A.has_output_type) {
-                try w.writeAll(",\"output\":");
-                try json.write(r.output, w);
-            }
-            try w.print(",\"steps\":{d},\"finish_reason\":\"{t}\",\"run_id\":", .{ r.steps, r.finish_reason });
-            try json.writeString(r.run_id, w);
-            try w.writeAll(",\"usage\":");
-            try json.write(r.usage, w);
-            try w.writeByte('}');
-            return aw.written();
-        }
-
         /// decisions_json: `[{"id":"...","approve":true}, {"id":"...","deny":"reason"}]`.
         fn parseDecisions(arena: Allocator, text: []const u8, err: ?*Error) ?[]const run.ApprovalDecision {
             const D = struct { id: []const u8, approve: ?bool = null, deny: ?[]const u8 = null };
@@ -438,15 +394,14 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                         return .done;
                     };
                     out.approval_id = null;
+                    const bytes = encode.eventJson(sa, e) catch return .err;
+                    const z_bytes = sa.dupeZ(u8, bytes) catch return .err;
+                    out.json = z_bytes.ptr;
+                    out.len = bytes.len;
                     switch (e) {
                         inline else => |payload, tag| {
-                            const t = @tagName(tag);
-                            const kind: c_int = comptime if (std.mem.eql(u8, t, "text_delta")) 0 else if (std.mem.eql(u8, t, "reasoning_delta")) 1 else if (std.mem.eql(u8, t, "tool_call")) 2 else if (std.mem.eql(u8, t, "tool_result")) 3 else if (std.mem.eql(u8, t, "approval_request")) 4 else if (std.mem.eql(u8, t, "step_finish")) 5 else if (std.mem.eql(u8, t, "output_partial")) 7 else if (std.mem.eql(u8, t, "output_partial_reset")) 8 else 6;
+                            const kind = comptime encode.eventKind(@tagName(tag));
                             out.kind = kind;
-                            const bytes: []const u8 = if (comptime kind <= 1) payload else if (comptime kind == 8) "{}" else (json.stringifyAlloc(sa, payload) catch return .err);
-                            const z_bytes = sa.dupeZ(u8, bytes) catch return .err;
-                            out.json = z_bytes.ptr;
-                            out.len = bytes.len;
                             if (comptime kind == 4) out.approval_id = (sa.dupeZ(u8, payload.id) catch return .err).ptr;
                             if (comptime kind == 6) so.done = true;
                         },
@@ -472,38 +427,6 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                     st(so).deinit();
                 }
             };
-        }
-
-        fn workflowResultJson(comptime W: type, arena: Allocator, r: W.Result) ![]const u8 {
-            var aw: std.Io.Writer.Allocating = .init(arena);
-            const w = &aw.writer;
-            switch (r) {
-                inline else => |payload, tag| {
-                    const t = @tagName(tag);
-                    if (comptime std.mem.eql(u8, t, "completed")) {
-                        try w.writeAll("{\"status\":\"completed\",\"output\":");
-                        try json.write(payload, w);
-                        try w.writeByte('}');
-                    } else if (comptime std.mem.eql(u8, t, "suspended")) {
-                        try w.writeAll("{\"status\":\"suspended\",\"run_id\":");
-                        try json.writeString(payload.run_id, w);
-                        switch (payload.at) {
-                            inline else => |p, at| {
-                                try w.print(",\"at\":\"{s}\",\"payload\":", .{@tagName(at)});
-                                try json.write(p, w);
-                            },
-                        }
-                        try w.writeByte('}');
-                    } else {
-                        try w.writeAll("{\"status\":\"failed\",\"step\":");
-                        try json.writeString(payload.step, w);
-                        try w.print(",\"error\":\"{t}\",\"message\":", .{payload.err});
-                        try json.writeString(payload.message, w);
-                        try w.writeByte('}');
-                    }
-                },
-            }
-            return aw.written();
         }
 
         fn workflowStart(h: ?*AppHandle, workflow_id: c_int, input_json: ?[*:0]const u8, err: ?*Error) callconv(.c) ?*Result {

@@ -126,6 +126,14 @@ pub const provider = struct {
     pub const sse = @import("provider/sse.zig");
 };
 
+/// `dev serve` (PLAN.md §19.2): the dev CLI's commands over HTTP.
+pub const dev = struct {
+    const s = @import("dev/serve.zig");
+    pub const serve = s.serve;
+    pub const Server = s.Server;
+    pub const ServeOptions = s.Options;
+};
+
 pub const fmt = struct {
     pub const json = @import("schema/json.zig").fmt;
 };
@@ -167,6 +175,7 @@ test {
     _ = @import("schema/migrate.zig");
     _ = @import("schema/stream_parse.zig");
     _ = @import("schema/comptime_json.zig");
+    _ = @import("dev/serve.zig");
     _ = @import("storage/memory_store.zig");
     _ = @import("storage/sqlite.zig");
     _ = @import("mcp/protocol.zig");

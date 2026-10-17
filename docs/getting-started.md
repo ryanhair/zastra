@@ -355,6 +355,6 @@ b.step("dev", "zastra dev CLI").dependOn(&dev.run.step);
 const lib = z.addCLib(b, .{ .name = "support", .app = app_mod, .zastra = zastra_dep });
 ```
 
-`zig build dev -- agents | schema | prefix | chat | run | runs | resume | graph | trace | models`. Your app module must export `pub const App`. If your `Ctx` has fields without defaults, it must also export `pub fn createContext(gpa, io) !*Ctx`.
+`zig build dev -- agents | schema | prefix | chat | run | runs | resume | graph | trace | models | serve`. `serve` offers the same commands over HTTP, with server-sent events for streams; see [dev-serve.md](dev-serve.md). Your app module must export `pub const App`. If your `Ctx` has fields without defaults, it must also export `pub fn createContext(gpa, io) !*Ctx`.
 
 The C library takes and returns JSON, and streams are pulled (`zastra_stream_next`, `zastra_stream_respond`). See [`examples/support/embed.c`](../examples/support/embed.c).

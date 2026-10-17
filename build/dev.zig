@@ -11,6 +11,7 @@
 //!   zig build dev -- graph <workflow>
 //!   zig build dev -- trace <run_id>
 //!   zig build dev -- models [--stale]
+//!   zig build dev -- serve [--port 4111] [--host 127.0.0.1] [--token-env NAME] [--allow-origin URL]
 //!
 //! The app module must export `pub const App`. If its Ctx can't be
 //! default-initialized, it must also export
@@ -43,6 +44,8 @@ const usage =
     \\  graph <workflow>                        print the workflow as Mermaid
     \\  trace <run_id>                          print the span tree of a run
     \\  models [--stale]                        catalog entries this App uses
+    \\  serve [--port p] [--host h] [--token-env NAME] [--allow-origin URL]
+    \\                                          the commands above over HTTP (docs/dev-serve.md)
     \\
     \\options: --db <path> (default zastra.sqlite)
     \\
@@ -93,7 +96,7 @@ pub fn main(init: std.process.Init) !u8 {
     if (std.mem.eql(u8, cmd, "graph")) return cmdGraph(out, rest);
     if (std.mem.eql(u8, cmd, "models")) return cmdModels(out, io, rest);
     if (std.mem.eql(u8, cmd, "trace")) return cmdTrace(out, io, arena, rest);
-    if (std.mem.eql(u8, cmd, "chat") or std.mem.eql(u8, cmd, "run") or std.mem.eql(u8, cmd, "runs") or std.mem.eql(u8, cmd, "resume")) {
+    if (std.mem.eql(u8, cmd, "chat") or std.mem.eql(u8, cmd, "run") or std.mem.eql(u8, cmd, "runs") or std.mem.eql(u8, cmd, "resume") or std.mem.eql(u8, cmd, "serve")) {
         return withRuntime(gpa, io, arena, out, init.environ_map, db_path, cmd, rest);
     }
     out.print("unknown command '{s}'\n\n", .{cmd});
@@ -385,7 +388,35 @@ fn withRuntime(gpa: Allocator, io: Io, arena: Allocator, out: Out, env: *const s
     if (std.mem.eql(u8, cmd, "run")) return runWorkflow(&rt, io, arena, out, rest);
     if (std.mem.eql(u8, cmd, "runs")) return listRuns(&rt, arena, out, rest);
     if (std.mem.eql(u8, cmd, "resume")) return resumeRun(&rt, io, arena, out, rest);
+    if (std.mem.eql(u8, cmd, "serve")) return serve(&rt, gpa, io, out, env, rest);
     return 2;
+}
+
+fn serve(rt: *App.Runtime, gpa: Allocator, io: Io, out: Out, env: *const std.process.Environ.Map, rest: []const []const u8) !u8 {
+    var opts: z.dev.ServeOptions = .{ .trace_file = trace_file };
+    if (flag(rest, "--host")) |h| opts.host = h;
+    if (flag(rest, "--port")) |p| opts.port = std.fmt.parseInt(u16, p, 10) catch {
+        out.print("--port: '{s}' isn't a port number\n", .{p});
+        return 2;
+    };
+    if (flag(rest, "--token-env")) |name| opts.token = env.get(name) orelse {
+        out.print("--token-env: {s} is not set\n", .{name});
+        return 2;
+    };
+    opts.allow_origin = flag(rest, "--allow-origin");
+    const srv = z.dev.Server(App).init(gpa, io, rt, opts) catch |err| {
+        switch (err) {
+            error.NeedsToken => out.print("--host {s} isn't loopback, so the server needs a token: pass --token-env NAME (requests then send `Authorization: Bearer $NAME`)\n", .{opts.host}),
+            error.InvalidHost => out.print("--host: '{s}' isn't an IP address\n", .{opts.host}),
+            else => out.print("can't listen on {s}:{d}: {t}\n", .{ opts.host, opts.port, err }),
+        }
+        return 1;
+    };
+    defer srv.deinit();
+    out.print("zastra dev serve: http://{s}:{d}/api/agents{s}\n", .{ opts.host, srv.port(), if (opts.token != null) " (token required)" else "" });
+    out.flush();
+    srv.acceptLoop();
+    return 0;
 }
 
 fn chat(rt: *App.Runtime, gpa: Allocator, io: Io, out: Out, rest: []const []const u8) !u8 {
@@ -518,7 +549,7 @@ fn listRuns(rt: *App.Runtime, arena: Allocator, out: Out, rest: []const []const 
             },
         }
         out.print("{s}  {t} {s}  {s}{s}{s}{s}\n", .{
-            r.run_id,                           r.kind, r.owner_id, r.status, if (r.suspended_at != null) " at " else "", r.suspended_at orelse "",
+            r.run_id,                                                                                                         r.kind, r.owner_id, r.status, if (r.suspended_at != null) " at " else "", r.suspended_at orelse "",
             if (current or !std.mem.eql(u8, r.status, "suspended")) "" else "  (saved by a different version; can't resume)",
         });
     }

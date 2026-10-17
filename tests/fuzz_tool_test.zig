@@ -154,6 +154,8 @@ test "a failure reproduces from the printed seed" {
 }
 
 test "a panicking tool prints its seed before the crash" {
+    // The crash note is a SIGABRT handler.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const io = t.io;
     const r = try std.process.run(t.allocator, io, .{ .argv = &.{options.fuzz_crash} });
     defer t.allocator.free(r.stdout);

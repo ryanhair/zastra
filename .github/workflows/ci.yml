@@ -30,6 +30,8 @@ jobs:
           ANTHROPIC_API_KEY: fake
           OPENAI_API_KEY: fake
         run: zig build embed
+      - name: dev serve, driven by curl (fake keys exercise the error paths)
+        run: bash tests/dev_serve_smoke.sh
 
   cross-compile:
     runs-on: ubuntu-latest

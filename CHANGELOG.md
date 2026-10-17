@@ -6,6 +6,8 @@
 - Trace ids are 128-bit: 32 hex characters (`z.trace.TraceId`) in spans, JSONL, `.trace_id` and saved runs. `dev trace` skips older 16-character ids.
 
 ### Added
+- **`dev serve`:** `zig build dev -- serve` offers the dev commands over HTTP with server-sent events, using the C library's JSON. Approvals suspend the stream and `POST /api/runs/{id}/resume/stream` continues it. It binds to loopback, checks `Host` and `Origin`, needs a token for other hosts, and caps bodies at 1 MiB. The server is also a library function, `z.dev.serve` / `z.dev.Server`. See `docs/dev-serve.md` (D50).
+- The App manifest lists each tool's `effects`.
 - **OTLP export:** `z.trace.otlp(.{ .endpoint, .headers, .service_name, .include_content })` sends spans as OTLP/HTTP JSON to any OpenTelemetry collector, in batches from a background task, with `OTEL_*` environment defaults and GenAI semantic-convention attribute names (D49).
 - `rt.model` calls are traced as `model_call` spans.
 - `z.testing.harness(App, .{ .tracing = ... })`.
