@@ -149,7 +149,9 @@ pub const Fake = struct {
         const len = req.head.content_length orelse 0;
         var body_buf: [4096]u8 = undefined;
         const br = req.readerExpectNone(&body_buf);
-        seen.body = try br.readAlloc(a, @intCast(len));
+        // A DELETE gets the shared `Reader.ending`, which is read-only memory:
+        // even a zero-length read writes to it.
+        if (req.head.method.requestHasBody()) seen.body = try br.readAlloc(a, @intCast(len));
         f.record(seen);
 
         if (f.mode == .unauthorized) {

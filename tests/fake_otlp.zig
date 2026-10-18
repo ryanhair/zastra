@@ -107,6 +107,8 @@ pub const Fake = struct {
         const body = blk: {
             f.mutex.lockUncancelable(f.io);
             defer f.mutex.unlock(f.io);
+            // Body-less methods get the shared, read-only `Reader.ending`.
+            if (!req.head.method.requestHasBody()) break :blk "";
             break :blk try br.readAlloc(f.arena.allocator(), @intCast(len));
         };
         {

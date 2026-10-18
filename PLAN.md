@@ -2068,4 +2068,5 @@ Zig 0.17.0 was released 2026-10-01. Its test runner fixes the fuzz-mode compile 
 - `--fuzz=20000` locally: the parser fuzz test reached 50K runs and the round-trip test 26K, no failures; a planted bug in the fuzzTool test was found.
 - Size: anthropic-only + memory 661,352 B (−1,224 B against 0.16), both_sqlite 1,520,928 B, full 1,601,928 B.
 - The first CI run failed `OTLP: a batch goes out once batch_size spans are queued` on macOS: a batch of 1 went out. A wake after a full batch sent everything queued, including spans that arrived during the send. This race predates 0.17. A wake now sends full batches only; the interval and shutdown still send everything.
+- The first Linux fuzz run crashed `MCP over HTTP: a 2025-11-25 server ... DELETE` (fuzz builds run every test, instrumented). The fake MCP server read a zero-length body from a DELETE, and `readerExpectNone` hands body-less methods the shared `Reader.ending`, which lives in read-only memory; even a zero-length read writes its `seek`. The fakes (MCP and OTLP) now skip the read for body-less methods. `dev serve` only reads POST bodies, so it isn't affected.
 
