@@ -2021,6 +2021,11 @@ test "lookup_order survives arbitrary input" {
 - Live: OTLP into Jaeger; `dev serve` with a streamed approval and resume on both providers.
 - CHANGELOG, with the trace-id widening under breaking changes, then tag `v1.3.0`.
 
+**Done (N16, 2026-10-17):** CI green on all targets (7e3e8dc); compile time 43 s vs v1.0.0's 38 s on the same runner (+13%); size budgets pass (anthropic-only + memory 662,576 B, full 1,601,848 B; `.otlp` adds 13,440 B, see §19.1). Live runs on the release code, with Jaeger all-in-one as the collector:
+- `z.dev.serve` on an App with a gated `issue_refund` tool on two agents, claude-sonnet-4-6 and gpt-5.4-mini, exporting with `z.trace.otlp`. On each provider, `curl -N .../stream` sent the deltas, `tool_call`, `approval_request`, then `suspended` and closed; `curl -N .../runs/{id}/resume/stream` with the approval ran the tool and ended with `result` (`completed`, 3 steps). `GET /api/runs` listed both as `completed`.
+- Jaeger received both traces under the service name: 11 spans each (`invoke_agent`, `agent_step`, `chat <model>`, `execute_tool`), no orphans or warnings. The suspended run and its resume share one trace id, as two `invoke_agent` roots. GenAI attributes arrived, including `gen_ai.input.messages`/`output.messages` with `.include_content`.
+- The support example under `zig build dev -- serve`: a two-turn chat on one thread (the model asked to confirm first), then `suspended` at `issue_refund`, resumed with the approval to `completed`. `GET /api/traces/{run}` returned the run's 8 spans from the JSONL file.
+
 ### 19.6 Order, dependencies and risks
 
 Order: R1, R2, N12, N14, N15, N13.

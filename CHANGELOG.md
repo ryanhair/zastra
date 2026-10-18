@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.3.0 (2026-10-17)
 
 ### Breaking changes
 - Trace ids are 128-bit: 32 hex characters (`z.trace.TraceId`) in spans, JSONL, `.trace_id` and saved runs. `dev trace` skips older 16-character ids.
