@@ -211,19 +211,27 @@ const Exporter = struct {
     fn sendLoop(e: *Exporter) void {
         defer e.stopped.set(e.io);
         while (true) {
+            // A wake means a batch filled up: send full batches only, so
+            // spans that arrive while sending wait for the next batch. The
+            // interval and shutdown send everything.
+            var timed_out = false;
             e.wake.waitTimeout(e.io, .{ .duration = .{ .raw = .fromMilliseconds(e.opts.interval_ms), .clock = .awake } }) catch |err| switch (err) {
-                error.Timeout => {},
+                error.Timeout => timed_out = true,
                 error.Canceled => return,
             };
             e.wake.reset();
             const closing = e.closing.load(.acquire);
-            e.flushAll();
+            e.flush(if (timed_out or closing) .all else .full_batches);
             if (closing) return;
         }
     }
 
     /// Send everything queued, a batch at a time.
     fn flushAll(e: *Exporter) void {
+        e.flush(.all);
+    }
+
+    fn flush(e: *Exporter, what: enum { all, full_batches }) void {
         e.send_mutex.lockUncancelable(e.io);
         defer e.send_mutex.unlock(e.io);
         while (true) {
@@ -235,6 +243,7 @@ const Exporter = struct {
             const dropped = blk: {
                 e.mutex.lockUncancelable(e.io);
                 defer e.mutex.unlock(e.io);
+                if (what == .full_batches and e.queue.items.len < e.opts.batch_size) return;
                 const n = @min(e.queue.items.len, e.opts.batch_size);
                 batch.appendSlice(e.gpa, e.queue.items[0..n]) catch return;
                 std.mem.copyForwards([]u8, e.queue.items, e.queue.items[n..]);

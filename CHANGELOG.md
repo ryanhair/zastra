@@ -8,6 +8,9 @@
 ### Added
 - Coverage-guided fuzzing works: `zig build test --fuzz` runs the parser, the round-trip property and `z.testing.fuzzTool` (with `.smith`) under the fuzzer. CI runs 10K iterations per fuzz test.
 
+### Fixed
+- OTLP export: a full batch could go out followed by a partial one with the spans that arrived while it was sent. Partial batches now wait for `interval_ms` or shutdown.
+
 ## v1.3.0 (2026-10-17)
 
 ### Breaking changes

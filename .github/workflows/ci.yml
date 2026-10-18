@@ -59,8 +59,10 @@ jobs:
         run: zig build size
       # Runner speed varies, so the baseline (v1.0.0) is built on the same
       # runner, each build with fresh caches. v1.0.0 needs Zig 0.16.0; the
-      # head uses the current Zig, so this compares what users see. Fails
-      # above 1.5x (PLAN.md §12, D55).
+      # head uses the current Zig, so this compares what users see. The build
+      # runner is compiled first, untimed: Zig 0.17 spends about a minute on
+      # it in an empty cache, for any project. Fails above 1.5x (PLAN.md §12,
+      # D55).
       - name: compile time of the example vs v1.0.0
         run: |
           git fetch -q --depth=1 origin tag v1.0.0
@@ -70,8 +72,11 @@ jobs:
           measure() {
             # Zig 0.16 fails to fetch .zip dependencies without a tmp/ directory.
             mkdir -p "$2/tmp"
-            ( cd "$1/examples/support" && start=$(date +%s) &&
-              ZIG_GLOBAL_CACHE_DIR="$2" ZIG_LOCAL_CACHE_DIR="$2/local" "$3" build -Doptimize="$4" >&2 &&
+            ( cd "$1/examples/support" &&
+              export ZIG_GLOBAL_CACHE_DIR="$2" ZIG_LOCAL_CACHE_DIR="$2/local" &&
+              "$3" build --help >/dev/null &&
+              start=$(date +%s) &&
+              "$3" build -Doptimize="$4" >&2 &&
               echo $(( $(date +%s) - start )) )
           }
           base=$(measure /tmp/base /tmp/cache-base /tmp/zig-x86_64-linux-0.16.0/zig ReleaseSmall)
