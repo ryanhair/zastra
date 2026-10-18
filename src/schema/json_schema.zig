@@ -95,11 +95,11 @@ fn containsJsonImpl(comptime T: type, comptime stack: []const type) bool {
         .optional => |o| containsJsonImpl(o.child, next),
         .pointer => |p| containsJsonImpl(p.child, next),
         .array => |a| containsJsonImpl(a.child, next),
-        .@"struct" => |s| for (s.fields) |f| {
-            if (containsJsonImpl(f.type, next)) break true;
+        .@"struct" => |s| for (s.field_types) |FT| {
+            if (containsJsonImpl(FT, next)) break true;
         } else false,
-        .@"union" => |u| for (u.fields) |f| {
-            if (containsJsonImpl(f.type, next)) break true;
+        .@"union" => |u| for (u.field_types) |FT| {
+            if (containsJsonImpl(FT, next)) break true;
         } else false,
         else => false,
     };
@@ -142,7 +142,7 @@ fn node(comptime T: type, comptime d: Dialect, comptime meta: Meta, comptime sta
             .@"enum" => |info| {
                 checkConstraints(T, meta, &.{}, path);
                 var tags: []const u8 = "";
-                for (info.fields, 0..) |f, i| tags = tags ++ (if (i == 0) "" else ",") ++ str(f.name);
+                for (info.field_names, 0..) |name, i| tags = tags ++ (if (i == 0) "" else ",") ++ str(name);
                 return "{\"type\":\"string\",\"enum\":[" ++ tags ++ "]" ++ tail ++ "}";
             },
             .optional => |info| {
@@ -200,14 +200,14 @@ fn node(comptime T: type, comptime d: Dialect, comptime meta: Meta, comptime sta
                 checkConstraints(T, meta, &.{}, path);
                 const kw = if (d == .canonical) "oneOf" else "anyOf";
                 var arms: []const u8 = "";
-                for (u.fields, 0..) |f, i| {
+                for (reflect.fields(T), 0..) |f, i| {
                     const tag_prop = "\"type\":{\"type\":\"string\",\"enum\":[" ++ str(f.name) ++ "]}";
                     const arm_path = path ++ "." ++ f.name;
                     const arm = switch (@typeInfo(f.type)) {
                         .void => "{\"type\":\"object\",\"properties\":{" ++ tag_prop ++ "},\"required\":[\"type\"],\"additionalProperties\":false}",
                         .@"struct" => |ps| blk: {
                             if (ps.is_tuple) errors.fail("'{s}' payload is a tuple; use a struct with named fields", .{arm_path});
-                            for (ps.fields) |pf| if (std.mem.eql(u8, pf.name, "type"))
+                            for (ps.field_names) |pname| if (std.mem.eql(u8, pname, "type"))
                                 errors.fail("'{s}' payload has a field named `type`, which collides with the union discriminator; rename the field", .{arm_path});
                             break :blk "{\"type\":\"object\"," ++ objectBody(f.type, d, stack ++ &[_]type{ T, f.type }, arm_path, tag_prop, "\"type\"") ++ "}";
                         },
@@ -237,7 +237,7 @@ fn objectBody(
     comptime leading_req: []const u8,
 ) []const u8 {
     comptime {
-        const fields = std.meta.fields(S);
+        const fields = reflect.fields(S);
         const names = reflect.fieldNames(S);
         validateFieldDecl(S, "docs", names, path);
         validateFieldDecl(S, "constraints", names, path);
@@ -275,7 +275,7 @@ fn validateFieldDecl(comptime S: type, comptime decl: []const u8, comptime names
         if (!reflect.hasDecl(S, decl)) return;
         const D = @TypeOf(@field(S, decl));
         if (@typeInfo(D) != .@"struct") errors.fail("'{s}.{s}' must be a struct literal like `.{{ .field = ... }}`", .{ path, decl });
-        for (std.meta.fields(D)) |k| {
+        for (reflect.fields(D)) |k| {
             var found = false;
             for (names) |n| if (std.mem.eql(u8, n, k.name)) {
                 found = true;
@@ -306,7 +306,7 @@ const all_constraint_kinds = [_][]const u8{ "min", "max", "min_len", "max_len", 
 fn checkConstraints(comptime T: type, comptime meta: Meta, comptime allowed: []const []const u8, comptime path: []const u8) void {
     comptime {
         const C = meta.constraints orelse return;
-        for (std.meta.fields(C)) |k| {
+        for (reflect.fields(C)) |k| {
             var ok = false;
             for (allowed) |a| if (std.mem.eql(u8, a, k.name)) {
                 ok = true;
@@ -327,7 +327,7 @@ fn checkConstraints(comptime T: type, comptime meta: Meta, comptime allowed: []c
     }
 }
 
-fn defaultJson(comptime f: std.builtin.Type.StructField) ?[]const u8 {
+fn defaultJson(comptime f: reflect.Field) ?[]const u8 {
     comptime {
         const v = f.defaultValue() orelse return null;
         return switch (@typeInfo(f.type)) {

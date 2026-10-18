@@ -124,7 +124,7 @@ fn syncAnthropic(arena: Allocator, io: std.Io, env: *const std.process.Environ.M
     var after: ?[]const u8 = null;
     while (true) {
         const url = if (after) |a|
-            try std.fmt.allocPrint(arena, "https://api.anthropic.com/v1/models?limit=1000&after_id={s}", .{a})
+            try arena.print("https://api.anthropic.com/v1/models?limit=1000&after_id={s}", .{a})
         else
             "https://api.anthropic.com/v1/models?limit=1000";
         var body: std.Io.Writer.Allocating = .init(arena);
@@ -137,7 +137,7 @@ fn syncAnthropic(arena: Allocator, io: std.Io, env: *const std.process.Environ.M
             .response_writer = &body.writer,
         });
         if (res.status != .ok) {
-            std.debug.print("models-update: GET /v1/models returned {d}: {s}\n", .{ @intFromEnum(res.status), body.written() });
+            std.debug.print("models-update: GET /v1/models returned {d}: {s}\n", .{ @backingInt(res.status), body.written() });
             return error.ModelsApiFailed;
         }
         const page = try std.json.parseFromSliceLeaky(ApiList, arena, body.written(), .{ .ignore_unknown_fields = true });

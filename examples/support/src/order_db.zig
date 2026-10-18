@@ -65,10 +65,10 @@ pub const OrderDb = struct {
         db.lock();
         defer db.unlock();
         if (key.len > 0) for (db.refunds.items, 0..) |r, i| if (std.mem.eql(u8, r.key, key))
-            return std.fmt.allocPrint(arena, "RF-{d}", .{i + 1});
+            return arena.print("RF-{d}", .{i + 1});
         const gpa = db.gpa orelse std.heap.page_allocator;
         try db.refunds.append(gpa, .{ .key = try gpa.dupe(u8, key), .order_id = try gpa.dupe(u8, order_id), .amount_cents = amount_cents });
-        return std.fmt.allocPrint(arena, "RF-{d}", .{db.refunds.items.len});
+        return arena.print("RF-{d}", .{db.refunds.items.len});
     }
 
     pub fn refundCount(db: *OrderDb) usize {

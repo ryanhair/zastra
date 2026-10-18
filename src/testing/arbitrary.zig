@@ -176,8 +176,8 @@ pub const Gen = struct {
                 return g.float(T, lo, hi);
             },
             .@"enum" => |info| {
-                const i = g.index(info.fields.len);
-                inline for (info.fields, 0..) |f, j| if (i == j) return @field(T, f.name);
+                const i = g.index(info.field_names.len);
+                inline for (info.field_names, 0..) |name, j| if (i == j) return @field(T, name);
                 unreachable;
             },
             .optional => |info| {
@@ -198,7 +198,7 @@ pub const Gen = struct {
                     const min_len: usize = if (C) |CC| (if (comptime has(CC, "min_len")) cval(CC, "min_len") else 0) else 0;
                     const max_len: usize = if (C) |CC| (if (comptime has(CC, "max_len")) cval(CC, "max_len") else @max(min_len, g.options.max_len)) else g.options.max_len;
                     const s = try g.string(min_len, max_len);
-                    return if (ptr.is_const) s else @constCast(s);
+                    return if (ptr.attrs.@"const") s else @constCast(s);
                 }
                 const min_items: usize = if (C) |CC| (if (comptime has(CC, "min_items")) cval(CC, "min_items") else 0) else 0;
                 const max_items: usize = if (C) |CC| (if (comptime has(CC, "max_items")) cval(CC, "max_items") else @max(min_items, g.options.max_items)) else g.options.max_items;
@@ -218,8 +218,9 @@ pub const Gen = struct {
             .@"struct" => return g.object(T),
             .@"union" => |u| {
                 if (u.tag_type == null) @compileError("zastra: z.testing.arbitrary can't generate untagged union " ++ @typeName(T));
-                const i = g.index(u.fields.len);
-                inline for (u.fields, 0..) |f, j| if (i == j) {
+                const fields = comptime reflect.fields(T);
+                const i = g.index(fields.len);
+                inline for (fields, 0..) |f, j| if (i == j) {
                     return @unionInit(T, f.name, try g.at(f.type, null));
                 };
                 unreachable;
@@ -231,7 +232,7 @@ pub const Gen = struct {
 
     fn object(g: *Gen, comptime S: type) Error!S {
         var out: S = undefined;
-        inline for (std.meta.fields(S)) |f| {
+        inline for (reflect.fields(S)) |f| {
             const C: ?type = comptime if (reflect.hasDecl(S, "constraints") and @hasField(@TypeOf(S.constraints), f.name))
                 ConstraintsOf(S, f.name)
             else
@@ -320,8 +321,8 @@ fn checkOverride(comptime T: type) void {
         const want = "`pub fn arbitrary(gen: *z.testing.Gen) !" ++ name ++ "`";
         const info = @typeInfo(F);
         if (info != .@"fn") errors.fail("{s}.arbitrary must be a function: {s}", .{ name, want });
-        const params = info.@"fn".params;
-        if (params.len != 1 or params[0].type != *Gen)
+        const params = info.@"fn".param_types;
+        if (params.len != 1 or params[0] != *Gen)
             errors.fail("{s}.arbitrary must take one `*z.testing.Gen` parameter: {s}", .{ name, want });
         const R = info.@"fn".return_type orelse errors.fail("{s}.arbitrary must return {s}: {s}", .{ name, name, want });
         const ok = switch (@typeInfo(R)) {

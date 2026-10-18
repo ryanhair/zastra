@@ -28,7 +28,7 @@ pub fn ToolCtx(comptime Ctx: type) type {
 
         /// Format into `arena`.
         pub fn fmt(t: *Self, comptime f: []const u8, args: anytype) Allocator.Error![]u8 {
-            return std.fmt.allocPrint(t.arena, f, args);
+            return t.arena.print(f, args);
         }
     };
 }

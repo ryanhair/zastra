@@ -58,15 +58,15 @@ pub fn Info(comptime T: type, comptime Ctx: type, comptime agent: []const u8) ty
             if (@TypeOf(T.ModelErrors) != type or @typeInfo(T.ModelErrors) != .error_set)
                 errors.fail("tool '{s}': `ModelErrors` must be an error set, e.g. `error{{OrderNotFound}}`", .{short});
             if (!@hasDecl(T, "error_messages")) errors.fail("tool '{s}' declares `ModelErrors` but no `error_messages`; add `pub const error_messages = .{{ .{s} = \"...\" }}`", .{ short, firstError(T.ModelErrors) });
-            const set = @typeInfo(T.ModelErrors).error_set orelse errors.fail("tool '{s}': `ModelErrors` can't be `anyerror`", .{short});
+            const set = @typeInfo(T.ModelErrors).error_set.error_names orelse errors.fail("tool '{s}': `ModelErrors` can't be `anyerror`", .{short});
             var names: [set.len][]const u8 = undefined;
-            for (set, 0..) |e, i| names[i] = e.name;
+            for (set, 0..) |name, i| names[i] = name;
             const M = @TypeOf(T.error_messages);
-            for (set) |e| if (!@hasField(M, e.name))
-                errors.fail("tool '{s}': `error_messages` has no entry for error.{s}; every error in `ModelErrors` needs a message for the model", .{ short, e.name });
-            for (std.meta.fields(M)) |f| {
+            for (set) |name| if (!@hasField(M, name))
+                errors.fail("tool '{s}': `error_messages` has no entry for error.{s}; every error in `ModelErrors` needs a message for the model", .{ short, name });
+            for (reflect.fields(M)) |f| {
                 var ok = false;
-                for (set) |e| if (std.mem.eql(u8, e.name, f.name)) {
+                for (set) |name| if (std.mem.eql(u8, name, f.name)) {
                     ok = true;
                 };
                 if (!ok) errors.fail("tool '{s}': `error_messages` has an entry for `{s}`, which is not in `ModelErrors`{s}", .{ short, f.name, errors.didYouMean(f.name, &names) });
@@ -106,18 +106,18 @@ pub fn Info(comptime T: type, comptime Ctx: type, comptime agent: []const u8) ty
 }
 
 fn firstError(comptime E: type) []const u8 {
-    const set = @typeInfo(E).error_set orelse return "SomeError";
-    return if (set.len > 0) set[0].name else "SomeError";
+    const set = @typeInfo(E).error_set.error_names orelse return "SomeError";
+    return if (set.len > 0) set[0] else "SomeError";
 }
 
 fn effectsOf(comptime T: type, comptime short: []const u8) Effects {
     comptime {
         if (!@hasDecl(T, "effects")) return Effects.initOne(.reads);
-        var set = Effects.initEmpty();
+        var set = Effects.empty;
         const E = @TypeOf(T.effects);
         if (!reflect.isTuple(E)) errors.fail("tool '{s}': `effects` must be a tuple like `.{{ .reads, .network }}`", .{short});
         const names = reflect.fieldNames(Effect);
-        for (0..std.meta.fields(E).len) |i| {
+        for (0..reflect.fields(E).len) |i| {
             const v = T.effects[i];
             if (@TypeOf(v) != @TypeOf(.enum_literal) and @TypeOf(v) != Effect)
                 errors.fail("tool '{s}': `effects` entries must be effect names like `.network`", .{short});
@@ -135,7 +135,7 @@ fn checkRequires(comptime T: type, comptime Ctx: type, comptime short: []const u
         if (@TypeOf(T.Requires) != type or @typeInfo(T.Requires) != .@"struct")
             errors.fail("tool '{s}': `Requires` must be a struct type listing the context fields it needs", .{short});
         const ctx_names = reflect.fieldNames(Ctx);
-        for (std.meta.fields(T.Requires)) |f| {
+        for (reflect.fields(T.Requires)) |f| {
             if (!@hasField(Ctx, f.name)) errors.fail("tool '{s}' requires `ctx.{s}: {s}`, but the App's Ctx ({s}) has no field `{s}`{s}", .{
                 short, f.name, @typeName(f.type), reflect.shortTypeName(Ctx), f.name, errors.didYouMean(f.name, ctx_names),
             });
@@ -153,15 +153,15 @@ fn checkExecute(comptime T: type, comptime Ctx: type, comptime short: []const u8
         const sig = "`pub fn execute(t: *z.ToolCtx(Ctx), in: Input) !Output`";
         if (@typeInfo(F) != .@"fn") errors.fail("tool '{s}': `execute` must be a function: {s}", .{ short, sig });
         const info = @typeInfo(F).@"fn";
-        if (info.params.len != 2) errors.fail("tool '{s}': `execute` takes {d} parameters; expected 2: {s}", .{ short, info.params.len, sig });
-        const P0 = info.params[0].type;
+        if (info.param_types.len != 2) errors.fail("tool '{s}': `execute` takes {d} parameters; expected 2: {s}", .{ short, info.param_types.len, sig });
+        const P0 = info.param_types[0];
         const ToolCtxT = @import("context.zig").ToolCtx(Ctx);
         if (P0 == null) {
             if (!generic) errors.fail("tool '{s}': `execute` takes `anytype` as its context; declare `pub const Requires = struct {{ ... }}` with the context fields it needs", .{short});
         } else if (P0.? != *ToolCtxT) {
             errors.fail("tool '{s}': `execute`'s first parameter is {s}; expected *z.ToolCtx({s})", .{ short, @typeName(P0.?), reflect.shortTypeName(Ctx) });
         }
-        if (info.params[1].type) |P1| if (P1 != T.Input)
+        if (info.param_types[1]) |P1| if (P1 != T.Input)
             errors.fail("tool '{s}': `execute`'s second parameter is {s}; expected Input", .{ short, @typeName(P1) });
         if (!info.is_generic) {
             const R = info.return_type.?;

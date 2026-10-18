@@ -76,7 +76,7 @@ These are binding. If a feature can't satisfy them, redesign the feature.
    - Every comptime check emits a hand-written `@compileError`: what is wrong, where, and a "did you mean" suggestion when one is plausible.
    - Generic instantiation noise is a bug.
 10. **Pin the toolchain.**
-    - Target Zig **0.16.x** only.
+    - Target Zig **0.17.x** only (0.16.x through v1.3.0; D55).
     - Use the `std.Io` model (`std.process.Init`, `io.async`, `io.concurrent`, `Future.await` and `Future.cancel`).
     - Assume `std.Io.Threaded`. Do not depend on `std.Io.Evented`.
 
@@ -945,7 +945,7 @@ Estimates assume one experienced Zig developer working focused time. The total i
 |---|---|---|
 | Comptime cost (compile time, eval branch quota) as Apps grow | Slow builds; quota errors that confuse users | Keep reflection linear; set `@setEvalBranchQuota` inside zastra with headroom; measure compile time of the example in CI against v1.0.0 built on the same runner (fresh caches) and fail above 1.5×; keep large data out of comptime. |
 | Compile-error quality | The main DX promise fails | Compile-fail tests are a release gate; message style guide (§7). |
-| Zig std churn (0.16 → 0.17) | Breakage | Pin 0.16; isolate `std.http` and `std.Io` usage behind `provider/http.zig` and a thin `io` shim; schedule a migration milestone after 0.17. |
+| Zig std churn between releases | Breakage | Pin one Zig release; isolate `std.http` and `std.Io` usage behind `provider/http.zig` and a thin `io` shim; migrate in its own milestone (0.16 → 0.17 was §20). |
 | `std.http.Client` / TLS gaps with provider endpoints | Blocks M2 | **Retired by the M0 spike** (§11): TLS and streaming work against both providers on 0.16.0. The remaining gaps (timeouts, retries, CA loading) are ours to build in `http.zig`. If a provider later needs something `std.http` can't do, the fallback is a C library behind `http.zig`; the interface doesn't change. |
 | Missing CA certificates in minimal containers | TLS fails at runtime in `FROM scratch` images | Load the CA bundle in `App.init` and fail there with a clear diagnostic; support an embedded PEM (§6.2). |
 | Concurrency in user code (parallel tools and steps share `Ctx`) | Data races in user code | Per-task arenas inside zastra; documented thread-safety requirement on `Ctx`; `pub const parallel = false` opt-out on tools (§6.4). |
@@ -1015,6 +1015,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D52 | `z.testing.fuzzTool` | Valid and hostile inputs along the model's tool-call path. Effectful tools need `.allow_effects` at compile time. Failures print a reproducing seed. (§19.4) |
 | D53 | Provider modules | One shared `stream.SseStream(Wire)` owns the request, error mapping, SSE and JSON parsing and an unbounded event queue. Each API is a wire module supplying `path`, `auth`, `State`, `onEvent` and comptime `capabilities`. `agent.zig` reads the capabilities instead of switching on `spec.api`, and keeps all the error wording (§7). There is no runtime provider vtable: the raw `rt.model` path is comptime too (D15). Rejected: a `resolveReasoning` per wire module, which would scatter §7 wording over four files. (§6.2, §19.0) |
 | D54 | Opening model streams | `runtime.State.openStream` is the only place that turns a spec into a provider request, for the agent loop and `rt.model` alike. Under the harness, requests carry a routing tag (`x-zastra-agent`: the agent id, or `model:<provider>/<id>` for `rt.model`) *plus* the spec's headers. `h.scriptModel` scripts `rt.model`. Spans stay with the callers. (§19.0b) |
+| D55 | Zig 0.17 | zastra moves to Zig 0.17.x, mainly for coverage-guided fuzzing (0.16.0's test runner doesn't compile in fuzz mode). Reflection goes through `reflect.fields(T)`, one entry per field, since `@typeInfo` now gives parallel arrays and `std.meta.fields` is gone. The compile-time check still compares with v1.0.0, built with Zig 0.16.0, so it measures what users see, compiler changes included. (§20) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
@@ -1976,7 +1977,7 @@ const order = try z.testing.arbitrary(LookupOrder.Input, arena, smith);
 - Two details the plan didn't name: an optional field with a non-null default is never generated as null (null is omitted from JSON and reads back as the default), and `?z.Json` never holds JSON `null` (it reads back as null).
 - The property found two bugs, both fixed: `[N]u8` was written as a JSON string while the schema and the parser use an array of integers, and the MCP validator rejected integers beyond i64 (a large `u64`) as non-integers.
 - 35 types × 500 values in `tests/arbitrary_test.zig` (about 5 s in Debug), plus 200 random-byte Smith inputs over all of them. Three compile-fail cases: wrong override parameter, wrong return type, wrong source type.
-- **Not met: `zig build test --fuzz`.** Zig 0.16.0's test runner doesn't compile in fuzz mode (`lib/compiler/test_runner.zig:566`, `*builtin.StackTrace` passed where `*const debug.StackTrace` is expected), so no fuzz test can run on 0.16.0. The `std.testing.fuzz` test is in place and runs its single empty input in normal tests; the random-byte Smith test covers the Smith path until a Zig release fixes the runner.
+- **Not met: `zig build test --fuzz`.** Zig 0.16.0's test runner doesn't compile in fuzz mode (`lib/compiler/test_runner.zig:566`, `*builtin.StackTrace` passed where `*const debug.StackTrace` is expected), so no fuzz test can run on 0.16.0. The `std.testing.fuzz` test is in place and runs its single empty input in normal tests; the random-byte Smith test covers the Smith path until a Zig release fixes the runner. **Met after the Zig 0.17 migration (§20).**
 
 ### 19.4 N15: `z.testing.fuzzTool` (D52)
 
@@ -2043,3 +2044,27 @@ Order: R1, R2, N12, N14, N15, N13.
 | `std.testing.Smith` is new in 0.16 and may change | The generator is written against an internal interface; Smith is one adapter |
 | `arbitrary` makes values the parser rejects (bugs in either) | The round-trip property is the main test of both; a disagreement fails loudly with the value |
 | Fuzzing effectful tools by accident | Compile-time effects gate |
+
+## 20. Zig 0.17 migration (D55)
+
+Zig 0.17.0 was released 2026-10-01. Its test runner fixes the fuzz-mode compile error that left §19.3's `zig build test --fuzz` criterion unmet, so the migration comes before further features. It is a toolchain change only: no API or behavior changes for users beyond the Zig version.
+
+**Changes.**
+- Build scripts: `b.args` → `run.addPassthruArgs()`; `b.build_root` → `b.root`. The compile-fail scan reads `tests/compile_fail/` while configuring, so it declares that with `b.dependOnDirectoryContents` and `b.dependOnFileContents` (configure results are cached in 0.17). Optimize modes are `.debug`/`.small` and `-Doptimize=small`.
+- Language: array repetition `**` is gone (`@splat`, or a comptime `repeat` helper in tests). Empty exhaustive enums are backed by `noreturn` (`make.Enum` with no names).
+- Reflection: `@typeInfo` structs, unions, enums, error sets and functions list their fields as parallel arrays (`field_names`, `field_types`, `field_attrs`, `error_names`, `param_types`); pointer attributes moved to `.attrs`; `std.meta.fields` is a compile error. `reflect.fields(T)` gives the old one-entry-per-field view (name, type, default, value) for structs, unions, enums and error sets, so the schema, tool and workflow checks read the same as before.
+- std: `Allocator.dupeZ` → `dupeSentinel`; `EnumSet.initEmpty()` → `.empty`; `std.ascii.indexOfIgnoreCase` → `findIgnoreCase`. Deprecated names were moved too (`std.fmt.allocPrint` → `Allocator.print`, `@intFromEnum`/`@enumFromInt` → `@backingInt`/`@fromBackingInt`, `std.builtin` → `std.lang`, `DebugAllocator` in a test → `std.testing.FailingAllocator`'s counters), so 0.18 has less to remove.
+- CI: Zig 0.17.0 on every job; the 0.16 zip-fetch workaround is gone (kept only for the v1.0.0 baseline build); `--global-cache-dir` is no longer a `zig build` flag, so the compile-time check uses `ZIG_GLOBAL_CACHE_DIR`/`ZIG_LOCAL_CACHE_DIR`. A new step runs `zig build test --fuzz=10K` on Linux and macOS.
+
+**Fuzzing.** Three `std.testing.fuzz` tests run under `--fuzz`: validated parsing never crashes (unit), the round-trip property over 35 types (`tests/arbitrary_test.zig`), and `fuzzTool` on a well-behaved tool with `.smith` (`tests/fuzz_tool_test.zig`). The fuzzer's report lists one test per test binary, but every fuzz test runs: a bug planted in the fuzzTool test's tool was found, and the crashing input saved to `.zig-cache/f/crash`. Normal `zig build test` still runs each fuzz test's empty input once, plus the random-byte Smith test.
+
+**Exit criteria:**
+- `zig build test` passes with the same test counts as on 0.16 (165), plus the new fuzz test; the support example's tests, `zig build embed` and the `dev serve` smoke script pass.
+- `zig build test --fuzz` runs all three fuzz tests and finds a planted bug.
+- Size budgets pass; compile time within 25% of v1.0.0 on the same CI runner; CI green on all four cross-compile targets.
+
+**Done (2026-10-18):**
+- 166/166 tests; support example 7/7; `embed` and the smoke script pass; cross-compiles for x86_64-linux-musl, aarch64-linux-musl, aarch64-macos and x86_64-windows build locally.
+- `--fuzz=20000` locally: the parser fuzz test reached 50K runs and the round-trip test 26K, no failures; a planted bug in the fuzzTool test was found.
+- Size: anthropic-only + memory 661,352 B (−1,224 B against 0.16), both_sqlite 1,520,928 B, full 1,601,928 B.
+

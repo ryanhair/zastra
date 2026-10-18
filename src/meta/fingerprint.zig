@@ -41,17 +41,17 @@ fn desc(comptime T: type, comptime stack: []const type) []const u8 {
             .array => |a| std.fmt.comptimePrint("[{d}]", .{a.len}) ++ desc(a.child, next),
             .@"enum" => |e| blk: {
                 var s: []const u8 = "enum{";
-                for (e.fields) |f| s = s ++ f.name ++ ",";
+                for (e.field_names) |n| s = s ++ n ++ ",";
                 break :blk s ++ "}";
             },
             .@"struct" => |st| blk: {
                 var s: []const u8 = "struct{";
-                for (st.fields) |f| s = s ++ f.name ++ ":" ++ desc(f.type, next) ++ ",";
+                for (st.field_names, st.field_types) |n, ft| s = s ++ n ++ ":" ++ desc(ft, next) ++ ",";
                 break :blk s ++ "}";
             },
             .@"union" => |u| blk: {
                 var s: []const u8 = "union{";
-                for (u.fields) |f| s = s ++ f.name ++ ":" ++ desc(f.type, next) ++ ",";
+                for (u.field_names, u.field_types) |n, ft| s = s ++ n ++ ":" ++ desc(ft, next) ++ ",";
                 break :blk s ++ "}";
             },
             else => "?" ++ @typeName(T),

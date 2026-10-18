@@ -147,7 +147,7 @@ pub fn Server(comptime App: type) type {
                 try w.writeAll("{\"error\":{\"code\":");
                 try json.writeString(code, w);
                 try w.writeAll(",\"message\":");
-                try json.writeString(try std.fmt.allocPrint(c.arena, fmt, args), w);
+                try json.writeString(try c.arena.print(fmt, args), w);
                 try w.writeAll("}}");
                 try c.send(status, aw.written());
             }
@@ -197,7 +197,7 @@ pub fn Server(comptime App: type) type {
             }
             if (s.opts.token) |token| {
                 c.close = true;
-                const want = try std.fmt.allocPrint(arena, "Bearer {s}", .{token});
+                const want = try arena.print("Bearer {s}", .{token});
                 const got = auth orelse "";
                 if (got.len != want.len or !constantTimeEql(got, want)) {
                     try c.fail(.unauthorized, "Unauthorized", "send `Authorization: Bearer <token>`", .{});
@@ -711,7 +711,7 @@ fn isLoopbackName(name: []const u8) bool {
 fn isLoopbackAddress(addr: Io.net.IpAddress) bool {
     return switch (addr) {
         .ip4 => |a| a.bytes[0] == 127,
-        .ip6 => |a| std.mem.eql(u8, &a.bytes, &([_]u8{0} ** 15 ++ [_]u8{1})),
+        .ip6 => |a| std.mem.eql(u8, &a.bytes, &(@as([15]u8, @splat(0)) ++ [_]u8{1})),
     };
 }
 

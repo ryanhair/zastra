@@ -124,7 +124,7 @@ pub const State = struct {
     pub fn newId(s: *const State, arena: Allocator, comptime prefix: []const u8) Allocator.Error![]const u8 {
         var raw: [8]u8 = undefined;
         s.io.random(&raw);
-        return std.fmt.allocPrint(arena, prefix ++ "_{x:0>16}", .{std.mem.readInt(u64, &raw, .little)});
+        return arena.print(prefix ++ "_{x:0>16}", .{std.mem.readInt(u64, &raw, .little)});
     }
 };
 

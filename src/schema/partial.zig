@@ -3,15 +3,17 @@
 //! semantics) and streaming partial output.
 
 const std = @import("std");
+const reflect = @import("../meta/reflect.zig");
 const make = @import("../meta/make.zig");
 
 pub fn Partial(comptime T: type) type {
     comptime {
         const info = @typeInfo(T);
         if (info != .@"struct") return T;
-        var names: [info.@"struct".fields.len][]const u8 = undefined;
-        var types: [info.@"struct".fields.len]type = undefined;
-        for (info.@"struct".fields, 0..) |f, i| {
+        const fields = reflect.fields(T);
+        var names: [fields.len][]const u8 = undefined;
+        var types: [fields.len]type = undefined;
+        for (fields, 0..) |f, i| {
             names[i] = f.name;
             const Inner = switch (@typeInfo(f.type)) {
                 .optional => |o| o.child,
@@ -27,7 +29,7 @@ pub fn Partial(comptime T: type) type {
 /// unset fields keep their value.
 pub fn merge(comptime T: type, base: T, patch: Partial(T)) T {
     var out = base;
-    inline for (std.meta.fields(T)) |f| {
+    inline for (reflect.fields(T)) |f| {
         if (@field(patch, f.name)) |v| {
             const Inner = switch (@typeInfo(f.type)) {
                 .optional => |o| o.child,

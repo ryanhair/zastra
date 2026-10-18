@@ -338,7 +338,7 @@ test "sqlite: a conversation survives a process restart" {
     defer tmp.cleanup();
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir_len = try tmp.dir.realPath(t.io, &path_buf);
-    const path = try std.fmt.allocPrint(t.allocator, "{s}/z.sqlite", .{path_buf[0..dir_len]});
+    const path = try t.allocator.print("{s}/z.sqlite", .{path_buf[0..dir_len]});
     defer t.allocator.free(path);
 
     var replay: z.provider.http.Replay = .init(t.allocator, &.{

@@ -51,9 +51,9 @@ const example = [_]Case{
 fn reasoningPrefixes() []const u8 {
     comptime {
         var out: []const u8 = "";
-        for (@typeInfo(fx.reasoning_agents).@"struct".decls) |d| {
-            const A = @field(fx.reasoning_agents, d.name);
-            out = out ++ d.name ++ (if (A.show_reasoning) " (reasoning_delta)" else "") ++ ":\n" ++ A.prefix.json ++ "\n\n";
+        for (@typeInfo(fx.reasoning_agents).@"struct".decl_names) |name| {
+            const A = @field(fx.reasoning_agents, name);
+            out = out ++ name ++ (if (A.show_reasoning) " (reasoning_delta)" else "") ++ ":\n" ++ A.prefix.json ++ "\n\n";
         }
         return out;
     }

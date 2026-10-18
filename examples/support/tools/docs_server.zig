@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
             for (hits) |h| {
                 var it = std.mem.tokenizeScalar(u8, q, ' ');
                 while (it.next()) |word| {
-                    if (word.len >= 4 and (std.ascii.indexOfIgnoreCase(h.question, word) != null or std.ascii.indexOfIgnoreCase(h.answer, word) != null)) {
+                    if (word.len >= 4 and (std.ascii.findIgnoreCase(h.question, word) != null or std.ascii.findIgnoreCase(h.answer, word) != null)) {
                         try text.writer.print("Q: {s}\nA: {s}\n\n", .{ h.question, h.answer });
                         break;
                     }

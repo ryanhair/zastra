@@ -351,8 +351,9 @@ fn printSpan(out: Out, comptime Span: type, all: []const Span, s: Span, depth: u
 fn makeContext(gpa: Allocator, io: Io) !*App.Context {
     if (@hasDecl(app, "createContext")) return app.createContext(gpa, io);
     const Ctx = App.Context;
-    inline for (std.meta.fields(Ctx)) |f| if (f.default_value_ptr == null)
-        @compileError("zastra dev: App's Ctx field `" ++ f.name ++ "` has no default, so the dev CLI can't build a context. Export `pub fn createContext(gpa: std.mem.Allocator, io: std.Io) !*Ctx` from the app module.");
+    const info = @typeInfo(Ctx).@"struct";
+    inline for (info.field_names, info.field_attrs) |name, attrs| if (attrs.default_value_ptr == null)
+        @compileError("zastra dev: App's Ctx field `" ++ name ++ "` has no default, so the dev CLI can't build a context. Export `pub fn createContext(gpa: std.mem.Allocator, io: std.Io) !*Ctx` from the app module.");
     const c = try gpa.create(Ctx);
     c.* = .{};
     return c;

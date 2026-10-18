@@ -2,6 +2,7 @@
 //! the request prefix, §5.10). Same shape as `json.zig`.
 
 const std = @import("std");
+const reflect = @import("../meta/reflect.zig");
 const str = @import("json_schema.zig").str;
 const Json = @import("json.zig").Json;
 
@@ -47,7 +48,7 @@ fn fields(comptime T: type, comptime v: T, comptime first_in: bool) []const u8 {
     comptime {
         var s: []const u8 = "";
         var first = first_in;
-        for (std.meta.fields(T)) |f| {
+        for (reflect.fields(T)) |f| {
             const x = @field(v, f.name);
             if (@typeInfo(f.type) == .optional and x == null) continue;
             s = s ++ (if (first) "" else ",") ++ str(f.name) ++ ":" ++ of(f.type, x);

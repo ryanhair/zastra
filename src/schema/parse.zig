@@ -31,7 +31,7 @@ pub fn parse(comptime T: type, arena: Allocator, text: []const u8, issue: *Issue
     const v = std.json.parseFromSliceLeaky(Value, arena, text, .{ .allocate = .alloc_always }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
-            issue.* = .{ .path = "$", .message = try std.fmt.allocPrint(arena, "invalid JSON ({t})", .{err}) };
+            issue.* = .{ .path = "$", .message = try arena.print("invalid JSON ({t})", .{err}) };
             return error.ValidationFailed;
         },
     };
@@ -53,7 +53,7 @@ const Parser = struct {
     fn fail(p: *Parser, comptime fmt: []const u8, args: anytype) Error {
         p.issue.* = .{
             .path = try p.arena.dupe(u8, p.path.items),
-            .message = try std.fmt.allocPrint(p.arena, fmt, args),
+            .message = try p.arena.print(fmt, args),
         };
         return error.ValidationFailed;
     }
@@ -120,8 +120,8 @@ const Parser = struct {
                 };
                 if (std.meta.stringToEnum(T, s)) |e| return e;
                 const names = comptime blk: {
-                    var n: [info.fields.len][]const u8 = undefined;
-                    for (info.fields, 0..) |f, i| n[i] = f.name;
+                    var n: [info.field_names.len][]const u8 = undefined;
+                    for (info.field_names, 0..) |name, i| n[i] = name;
                     const final = n;
                     break :blk &final;
                 };
@@ -229,7 +229,7 @@ const Parser = struct {
         const names = comptime reflect.fieldNames(S);
         try p.rejectUnknown(obj, comptime extra_keys ++ names);
         var out: S = undefined;
-        inline for (std.meta.fields(S)) |f| {
+        inline for (reflect.fields(S)) |f| {
             const C: ?type = comptime if (reflect.hasDecl(S, "constraints") and @hasField(@TypeOf(S.constraints), f.name))
                 ConstraintsOf(S, f.name)
             else

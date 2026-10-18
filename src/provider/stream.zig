@@ -74,7 +74,7 @@ pub fn SseStream(comptime Wire: type) type {
         pub fn open(arena: Allocator, h: *http.Http, req: p.Request) p.Error!Self {
             var aw: Writer.Allocating = .init(arena);
             Wire.writeBody(&aw.writer, req) catch return error.OutOfMemory;
-            const url = std.fmt.allocPrint(arena, "{s}" ++ Wire.path, .{req.base_url}) catch return error.OutOfMemory;
+            const url = arena.print("{s}" ++ Wire.path, .{req.base_url}) catch return error.OutOfMemory;
 
             var headers: std.ArrayList(std.http.Header) = .empty;
             headers.append(arena, .{ .name = "accept", .value = "text/event-stream" }) catch return error.OutOfMemory;
@@ -149,9 +149,9 @@ pub fn SseStream(comptime Wire: type) type {
 /// "<name> <status> <type or code>: <message>" from an error body.
 fn errorMessage(arena: Allocator, comptime name: []const u8, status: u16, body: []const u8) []const u8 {
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch
-        return std.fmt.allocPrint(arena, name ++ " {d}: {s}", .{ status, body }) catch body;
+        return arena.print(name ++ " {d}: {s}", .{ status, body }) catch body;
     const e = (if (v == .object) v.object.get("error") else null) orelse v;
-    return std.fmt.allocPrint(arena, name ++ " {d} {s}: {s}", .{
+    return arena.print(name ++ " {d} {s}: {s}", .{
         status, p.getStr(e, "type") orelse p.getStr(e, "code") orelse "error", p.getStr(e, "message") orelse body,
     }) catch body;
 }

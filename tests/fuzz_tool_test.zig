@@ -110,6 +110,17 @@ test "a well-behaved tool survives valid and hostile arguments" {
     try t.expect(ctx.calls >= 300);
 }
 
+test "a well-behaved tool under the fuzzer" {
+    // `zig build test --fuzz` drives this with coverage feedback; a normal
+    // run tries the empty input once.
+    try std.testing.fuzz({}, struct {
+        fn one(_: void, smith: *std.testing.Smith) anyerror!void {
+            var ctx: Ctx = .{};
+            try z.testing.fuzzTool(App, Search, .{ .ctx = &ctx, .smith = smith, .mapped_errors_only = true });
+        }
+    }.one, .{});
+}
+
 test "an output that breaks Output's schema is reported" {
     var ctx: Ctx = .{};
     try t.expectError(error.ToolFuzzFailed, z.testing.fuzzTool(App, TooMany, .{ .ctx = &ctx, .iterations = 50, .quiet = true }));
@@ -123,14 +134,14 @@ test "unmapped errors fail only with .mapped_errors_only" {
 
 test "a tool that keeps memory through ctx shows up as a leak" {
     // With `std.testing.allocator` in the ctx, the test fails with a leak
-    // report; this counts instead, so the planted leak doesn't fail the suite.
-    var debug: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
-    var ctx: Ctx = .{ .gpa = debug.allocator() };
+    // report; this counts instead, then frees what the tool kept.
+    var counting: t.FailingAllocator = .init(t.allocator, .{});
+    var ctx: Ctx = .{ .gpa = counting.allocator() };
     try z.testing.fuzzTool(App, Leaky, .{ .ctx = &ctx, .iterations = 10, .hostile = false });
-    try t.expect(debug.total_requested_bytes > 0);
+    try t.expect(counting.allocated_bytes > counting.freed_bytes);
     for (ctx.kept.items) |k| ctx.gpa.free(k);
     ctx.kept.deinit(ctx.gpa);
-    try t.expectEqual(.ok, debug.deinit());
+    try t.expectEqual(counting.allocated_bytes, counting.freed_bytes);
 }
 
 test "effectful tools run with .allow_effects" {

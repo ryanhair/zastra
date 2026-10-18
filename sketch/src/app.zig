@@ -5,7 +5,7 @@
 //! *types*; their JSON Schemas, prompts, tool tables and step graphs are built
 //! and checked by the compiler and baked into the binary.
 //!
-//! Working name for the library: `zastra`. (Hypothetical API, Zig 0.16 idioms.)
+//! Working name for the library: `zastra`. (Hypothetical API, Zig 0.17 idioms.)
 
 const std = @import("std");
 const z = @import("zastra");

@@ -114,7 +114,7 @@ pub const Fake = struct {
             defer f.mutex.unlock(f.io);
             try f.seen.append(f.gpa, .{ .path = path, .content_type = content_type, .headers = hs.items, .body = body });
         }
-        try req.respond("{}", .{ .status = @enumFromInt(f.status.load(.acquire)), .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
+        try req.respond("{}", .{ .status = @fromBackingInt(@intCast(f.status.load(.acquire))), .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
     }
 
     pub fn header(r: Request, name: []const u8) ?[]const u8 {

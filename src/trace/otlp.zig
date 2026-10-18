@@ -108,11 +108,11 @@ const Exporter = struct {
             }
         }.f;
         e.url = if (e.opts.endpoint) |ep|
-            try std.fmt.allocPrint(e.gpa, "{s}/v1/traces", .{std.mem.trimEnd(u8, ep, "/")})
+            try e.gpa.print("{s}/v1/traces", .{std.mem.trimEnd(u8, ep, "/")})
         else if (get(env, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")) |u|
             try e.gpa.dupe(u8, u)
         else
-            try std.fmt.allocPrint(e.gpa, "{s}/v1/traces", .{std.mem.trimEnd(u8, get(env, "OTEL_EXPORTER_OTLP_ENDPOINT") orelse "http://localhost:4318", "/")});
+            try e.gpa.print("{s}/v1/traces", .{std.mem.trimEnd(u8, get(env, "OTEL_EXPORTER_OTLP_ENDPOINT") orelse "http://localhost:4318", "/")});
 
         var hs: std.ArrayList(std.http.Header) = .empty;
         errdefer {

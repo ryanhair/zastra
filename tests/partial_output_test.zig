@@ -47,7 +47,7 @@ fn partials(comptime A: type, h: anytype, gpa: std.mem.Allocator) !std.ArrayList
     const s = try h.agent(A).stream("Summarize the ticket.", .{});
     defer s.deinit();
     while (try s.next()) |e| switch (e) {
-        .output_partial => |v| try out.append(gpa, try std.fmt.allocPrint(gpa, "{f}", .{z.fmt.json(v)})),
+        .output_partial => |v| try out.append(gpa, try gpa.print("{f}", .{z.fmt.json(v)})),
         .output_partial_reset => try out.append(gpa, try gpa.dupe(u8, "RESET")),
         else => {},
     };
@@ -66,7 +66,7 @@ test "partial output on every API, natively and through final_answer" {
     var ctx: Ctx = .{};
     var h = try z.testing.harness(App, .{ .ctx = &ctx });
     defer h.deinit();
-    const full = try std.fmt.allocPrint(gpa, "{f}", .{z.fmt.json(report)});
+    const full = try gpa.print("{f}", .{z.fmt.json(report)});
     defer gpa.free(full);
     inline for (all) |A| {
         h.script(A, &.{.chunked(7, .output(report))});
@@ -154,6 +154,6 @@ test "generate doesn't parse partial output; agents without the flag have no par
     const r = try h.agent(NativeAnthropic).generate("Summarize.", .{});
     try t.expectEqualStrings(summary, r.output.summary);
     comptime {
-        for (std.meta.fields(Plain.Event)) |f| if (std.mem.startsWith(u8, f.name, "output_partial")) @compileError("Plain has partial events");
+        for (@typeInfo(Plain.Event).@"union".field_names) |name| if (std.mem.startsWith(u8, name, "output_partial")) @compileError("Plain has partial events");
     }
 }

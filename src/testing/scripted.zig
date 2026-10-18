@@ -33,7 +33,7 @@ fn noTools(comptime A: type, comptime what: []const u8) void {
 
 /// One scripted model turn for agent `A`.
 pub fn Step(comptime A: type) type {
-    const has_calls = @typeInfo(A.ToolCall).@"union".fields.len > 0;
+    const has_calls = @typeInfo(A.ToolCall).@"union".field_names.len > 0;
     const Calls = if (has_calls) struct { buf: [max_calls_per_step]A.ToolCall = undefined, len: usize = 0 } else void;
     return struct {
         const Self = @This();
@@ -148,7 +148,7 @@ pub fn render(comptime A: type, gpa: Allocator, step: Step(A), n: usize) ![]u8 {
                 switch (call) {
                     inline else => |input, tag| {
                         if (comptime std.mem.eql(u8, @tagName(tag), "mcp")) {
-                            tool_buf[i] = .{ .name = try std.fmt.allocPrint(scratch, "{s}__{s}", .{ input.server, input.tool }), .args = input.args_json };
+                            tool_buf[i] = .{ .name = try scratch.print("{s}__{s}", .{ input.server, input.tool }), .args = input.args_json };
                         } else {
                             tool_buf[i] = .{ .name = @tagName(tag), .args = try json.stringifyAlloc(scratch, input) };
                         }

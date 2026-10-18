@@ -77,7 +77,7 @@ pub const MemoryStore = struct {
     }
 
     fn wmKey(gpa: Allocator, resource: []const u8, agent_id: []const u8) ![]u8 {
-        return std.fmt.allocPrint(gpa, "{s}\x00{s}", .{ resource, agent_id });
+        return gpa.print("{s}\x00{s}", .{ resource, agent_id });
     }
 
     pub fn getWorkingMemory(m: *MemoryStore, arena: Allocator, resource: []const u8, agent_id: []const u8) !?storage.Storage.WorkingMemory {

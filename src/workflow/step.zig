@@ -155,10 +155,10 @@ pub fn checkStep(comptime S: type, comptime Ctx: type) void {
         const F = @TypeOf(S.run);
         if (@typeInfo(F) != .@"fn") errors.fail("step '{s}': `run` must be a function", .{id});
         const info = @typeInfo(F).@"fn";
-        if (info.params.len != 2) errors.fail("step '{s}': `run` takes {d} parameters; expected `run(w: *z.StepCtx(Ctx, @This()), in: Input)`", .{ id, info.params.len });
-        if (info.params[0].type) |P| if (P != *StepCtx(Ctx, S))
+        if (info.param_types.len != 2) errors.fail("step '{s}': `run` takes {d} parameters; expected `run(w: *z.StepCtx(Ctx, @This()), in: Input)`", .{ id, info.param_types.len });
+        if (info.param_types[0]) |P| if (P != *StepCtx(Ctx, S))
             errors.fail("step '{s}': `run`'s first parameter is {s}; expected *z.StepCtx({s}, @This())", .{ id, @typeName(P), reflect.shortTypeName(Ctx) });
-        if (info.params[1].type) |P| if (P != S.Input)
+        if (info.param_types[1]) |P| if (P != S.Input)
             errors.fail("step '{s}': `run`'s second parameter is {s}; expected Input ({s})", .{ id, @typeName(P), @typeName(S.Input) });
         const R = info.return_type.?;
         const payload = switch (@typeInfo(R)) {
@@ -187,7 +187,7 @@ pub fn NeedsOf(comptime S: type) type {
             errors.fail("step '{s}': `needs` must be a struct literal like `.{{ .ticket = Classify }}`", .{idOf(S)});
         var names: []const []const u8 = &.{};
         var types: []const type = &.{};
-        for (std.meta.fields(N)) |f| {
+        for (reflect.fields(N)) |f| {
             const R = @field(S.needs, f.name);
             if (@TypeOf(R) != type) errors.fail("step '{s}': `needs.{s}` must be a step type or `z.initial(T)`", .{ idOf(S), f.name });
             const T = if (isInitial(R)) R.Type else if (reflect.isContainer(R) and @hasDecl(R, "Output")) R.Output else errors.fail("step '{s}': `needs.{s}` = {s}, which is not a step (no `Output`)", .{ idOf(S), f.name, @typeName(R) });
@@ -229,7 +229,7 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
 
         /// Format into `arena`.
         pub fn fmt(w: *Self, comptime f: []const u8, args: anytype) Allocator.Error![]u8 {
-            return std.fmt.allocPrint(w.arena, f, args);
+            return w.arena.print(f, args);
         }
 
         /// Call an agent from this step. History is scoped to this run and
@@ -275,7 +275,7 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
                     const w = c.w;
                     const n = w.agent_calls;
                     w.agent_calls += 1;
-                    const id = try std.fmt.allocPrint(w.arena, "{s}/{s}{s}#{d}", .{ w.run_id, w.step_id, w.iteration, n });
+                    const id = try w.arena.print("{s}/{s}{s}#{d}", .{ w.run_id, w.step_id, w.iteration, n });
                     var o = try c.options(opts);
                     o.run_id = id;
                     o.keep_result = true;
@@ -307,7 +307,7 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
 
                 fn options(c: @This(), opts: agent_run.Options(A)) Allocator.Error!agent_run.Options(A) {
                     var o = opts;
-                    if (o.thread == null) o.thread = try std.fmt.allocPrint(c.w.arena, "{s}/{s}", .{ c.w.run_id, c.w.step_id });
+                    if (o.thread == null) o.thread = try c.w.arena.print("{s}/{s}", .{ c.w.run_id, c.w.step_id });
                     if (o.resource == null) o.resource = c.w.resource;
                     if (o.trace_parent == null) o.trace_parent = c.w.trace;
                     if (o.trace_id == null) o.trace_id = c.w.trace_id;
@@ -381,9 +381,9 @@ fn PromptText(comptime In: type, comptime opts: anytype) type {
 pub fn parallel(comptime branches: anytype) type {
     comptime {
         const B = @TypeOf(branches);
-        if (@typeInfo(B) != .@"struct" or reflect.isTuple(B) or std.meta.fields(B).len == 0)
+        if (@typeInfo(B) != .@"struct" or reflect.isTuple(B) or reflect.fields(B).len == 0)
             errors.fail("z.step.parallel(...) takes a struct literal of named steps, like `.{{ .order = FetchOrder, .faq = SearchFaq }}`", .{});
-        const fields = std.meta.fields(B);
+        const fields = reflect.fields(B);
         const First = @field(branches, fields[0].name);
         var names: []const []const u8 = &.{};
         var outs: []const type = &.{};
@@ -446,7 +446,7 @@ pub fn loop(comptime Body: anytype, comptime opts: anytype) type {
             errors.fail("z.step.loop({s}, ...): `.until` is required: `fn ({s}) bool`, checked after each iteration", .{ body_id, reflect.shortTypeName(Body.Output) });
         const F = @TypeOf(opts.until);
         const ok = switch (@typeInfo(F)) {
-            .@"fn" => |f| f.params.len == 1 and f.params[0].type == Body.Output and f.return_type == bool,
+            .@"fn" => |f| f.param_types.len == 1 and f.param_types[0] == Body.Output and f.return_type == bool,
             else => false,
         };
         if (!ok) errors.fail("z.step.loop({s}, ...): `.until` must be `fn ({s}) bool`, got {s}", .{ body_id, reflect.shortTypeName(Body.Output), @typeName(F) });

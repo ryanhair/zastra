@@ -18,7 +18,9 @@ pub fn TaggedUnion(comptime names: []const []const u8, comptime types: []const t
 /// `enum { names... }`
 pub fn Enum(comptime names: []const []const u8) type {
     comptime {
-        const Int = std.math.IntFittingRange(0, @max(names.len, 1) - 1);
+        // An empty exhaustive enum is backed by `noreturn`.
+        if (names.len == 0) return @Enum(noreturn, .exhaustive, &.{}, &.{});
+        const Int = std.math.IntFittingRange(0, names.len - 1);
         var vals: [names.len]Int = undefined;
         for (0..names.len) |i| vals[i] = i;
         var zn: [names.len][]const u8 = undefined;
@@ -45,7 +47,7 @@ pub fn OptionalStruct(comptime names: []const []const u8, comptime types: []cons
     comptime {
         var zn: [names.len][]const u8 = undefined;
         var ts: [names.len]type = undefined;
-        var attrs: [names.len]std.builtin.Type.StructField.Attributes = undefined;
+        var attrs: [names.len]std.lang.Type.Struct.FieldAttributes = undefined;
         for (names, types, 0..) |n, T, i| {
             zn[i] = n;
             ts[i] = ?T;

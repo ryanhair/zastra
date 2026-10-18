@@ -62,12 +62,70 @@ pub fn hasDecl(comptime T: type, comptime name: []const u8) bool {
     return isContainer(T) and @hasDecl(T, name);
 }
 
+/// One field of a struct, union or enum, or one error of an error set.
+/// `@typeInfo` lists these as parallel arrays; this is one entry of them.
+pub const Field = struct {
+    name: [:0]const u8,
+    /// `void` for enum fields and errors.
+    type: type = void,
+    /// Struct fields only.
+    default_value_ptr: ?*const anyopaque = null,
+    is_comptime: bool = false,
+    /// Enum fields only.
+    value: comptime_int = 0,
+
+    pub fn defaultValue(comptime f: Field) ?f.type {
+        const dp: *const f.type = @ptrCast(@alignCast(f.default_value_ptr orelse return null));
+        return dp.*;
+    }
+};
+
+/// The fields of a struct, tuple, union or enum, or the errors of an error
+/// set, in declaration order.
+pub inline fn fields(comptime T: type) []const Field {
+    return comptime fieldsOf(T);
+}
+
+fn fieldsOf(comptime T: type) []const Field {
+    {
+        switch (@typeInfo(T)) {
+            .@"struct" => |s| {
+                var out: [s.field_names.len]Field = undefined;
+                for (&out, s.field_names, s.field_types, s.field_attrs) |*o, n, ft, a|
+                    o.* = .{ .name = n, .type = ft, .default_value_ptr = a.default_value_ptr, .is_comptime = a.@"comptime" };
+                const final = out;
+                return &final;
+            },
+            .@"union" => |u| {
+                var out: [u.field_names.len]Field = undefined;
+                for (&out, u.field_names, u.field_types) |*o, n, ft| o.* = .{ .name = n, .type = ft };
+                const final = out;
+                return &final;
+            },
+            .@"enum" => |e| {
+                var out: [e.field_names.len]Field = undefined;
+                for (&out, e.field_names, e.field_values) |*o, n, v| o.* = .{ .name = n, .value = v };
+                const final = out;
+                return &final;
+            },
+            .error_set => |es| {
+                const names = es.error_names orelse @compileError("fields: `anyerror` has no error list");
+                var out: [names.len]Field = undefined;
+                for (&out, names) |*o, n| o.* = .{ .name = n };
+                const final = out;
+                return &final;
+            },
+            else => @compileError("fields: " ++ @typeName(T) ++ " has no fields"),
+        }
+    }
+}
+
 /// Names of a struct's (or tuple's) fields.
 pub fn fieldNames(comptime T: type) []const []const u8 {
     comptime {
-        const fields = std.meta.fields(T);
-        var names: [fields.len][]const u8 = undefined;
-        for (fields, 0..) |f, i| names[i] = f.name;
+        const fs = fields(T);
+        var names: [fs.len][]const u8 = undefined;
+        for (fs, 0..) |f, i| names[i] = f.name;
         const final = names;
         return &final;
     }
@@ -78,7 +136,7 @@ pub fn declNames(comptime T: type) []const []const u8 {
         if (!isContainer(T)) return &.{};
         const decls = std.meta.declarations(T);
         var names: [decls.len][]const u8 = undefined;
-        for (decls, 0..) |d, i| names[i] = d.name;
+        for (decls, 0..) |d, i| names[i] = d;
         const final = names;
         return &final;
     }

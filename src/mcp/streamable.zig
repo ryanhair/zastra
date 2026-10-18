@@ -69,7 +69,7 @@ pub const Streamable = struct {
                 c.diag.print(0, "MCP server '{s}' needs {s} (its bearer token)", .{ name, k });
                 return error.McpMissingToken;
             };
-            c.auth = try std.fmt.allocPrint(gpa, "Bearer {s}", .{v});
+            c.auth = try gpa.print("Bearer {s}", .{v});
         }
         errdefer if (c.auth) |x| gpa.free(x);
         errdefer if (c.session_id) |x| gpa.free(x);

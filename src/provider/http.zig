@@ -221,7 +221,7 @@ pub const Http = struct {
         defer dir.close(h.io);
         var name_buf: [32]u8 = undefined;
         try dir.writeFile(h.io, .{ .sub_path = try std.fmt.bufPrint(&name_buf, "{d:0>3}.sse", .{n}), .data = body });
-        const meta = try std.fmt.allocPrint(h.gpa, "{{\"url\":\"{s}\",\"status\":{d}}}\n", .{ url, res.status });
+        const meta = try h.gpa.print("{{\"url\":\"{s}\",\"status\":{d}}}\n", .{ url, res.status });
         defer h.gpa.free(meta);
         try dir.writeFile(h.io, .{ .sub_path = try std.fmt.bufPrint(&name_buf, "{d:0>3}.json", .{n}), .data = meta });
         res.recorded = body;
@@ -315,7 +315,7 @@ pub const Http = struct {
             res.live.req.sendBodiless() catch |err| return mapErr(err);
         }
         const resp = res.live.req.receiveHead(&res.live.redirect_buf) catch |err| return mapErr(err);
-        res.status = @intFromEnum(resp.head.status);
+        res.status = @backingInt(resp.head.status);
         res.retry_after_ms = retryAfter(resp.head);
         res.headers = try copyHeaders(h.gpa, resp.head);
         res.owns_headers = true;

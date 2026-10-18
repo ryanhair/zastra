@@ -53,7 +53,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/fake_mcp_server.zig"),
             .target = b.graph.host,
-            .optimize = .Debug,
+            .optimize = .debug,
         }),
     });
     // A test binary that crashes inside z.testing.fuzzTool; fuzz_tool_test
@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
     const fuzz_crash = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/fuzz_crash.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
         .imports = &.{.{ .name = "zastra", .module = mod }},
     }) });
     const test_options = b.addOptions();
@@ -97,7 +97,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/golden/main.zig"),
             .target = b.graph.host,
-            .optimize = .Debug,
+            .optimize = .debug,
             .imports = &.{
                 .{ .name = "zastra", .module = mod },
                 .{ .name = "support_app", .module = support_app },
@@ -112,14 +112,14 @@ pub fn build(b: *std.Build) void {
     const golden_update = b.addRunArtifact(golden_exe);
     golden_update.setCwd(b.path("."));
     golden_update.has_side_effects = true;
-    if (b.args) |args| golden_update.addArgs(args);
+    golden_update.addPassthruArgs();
     b.step("golden", "Check golden files (-- --update to rewrite them)").dependOn(&golden_update.step);
 
     // Compile-fail tests.
     addCompileFailTests(b, test_step);
 
     // Size budget (PLAN.md §5.6, M7): three variants, cross-compiled for
-    // aarch64-linux-musl at ReleaseSmall, with upper bounds. Variant 1 is also
+    // aarch64-linux-musl at `small` (ReleaseSmall), with upper bounds. Variant 1 is also
     // built unstripped to check that it contains no OpenAI provider code.
     addSizeChecks(b, mod, sqlite_dep);
 
@@ -134,7 +134,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/models-update/main.zig"),
             .target = b.graph.host,
-            .optimize = .Debug,
+            .optimize = .debug,
         }),
     });
     const models_run = b.addRunArtifact(models_update);
@@ -147,7 +147,7 @@ pub fn build(b: *std.Build) void {
 
 fn addSizeChecks(b: *std.Build, host_mod: *std.Build.Module, sqlite_dep: *std.Build.Dependency) void {
     _ = host_mod;
-    const step = b.step("size", "Check binary-size budgets (aarch64-linux-musl, ReleaseSmall)");
+    const step = b.step("size", "Check binary-size budgets (aarch64-linux-musl, -Doptimize=small)");
     const target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl });
     const checker = b.addExecutable(.{
         .name = "size-check",
@@ -161,11 +161,11 @@ fn addSizeChecks(b: *std.Build, host_mod: *std.Build.Module, sqlite_dep: *std.Bu
     };
     for (variants) |v| for ([_]bool{ true, false }) |strip| {
         if (!strip and !std.mem.eql(u8, v.name, "anthropic_memory")) continue;
-        const z = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = .ReleaseSmall });
+        const z = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = .small });
         const sqlite = b.addLibrary(.{
             .name = "zastra_sqlite",
             .linkage = .static,
-            .root_module = b.createModule(.{ .target = target, .optimize = .ReleaseSmall, .link_libc = true }),
+            .root_module = b.createModule(.{ .target = target, .optimize = .small, .link_libc = true }),
         });
         sqlite.root_module.addCSourceFile(.{ .file = sqlite_dep.path("sqlite3.c"), .flags = &.{ "-DSQLITE_DQS=0", "-DSQLITE_THREADSAFE=1", "-DSQLITE_OMIT_LOAD_EXTENSION", "-DSQLITE_OMIT_DEPRECATED", "-DSQLITE_DEFAULT_MEMSTATUS=0" } });
         z.linkLibrary(sqlite);
@@ -174,7 +174,7 @@ fn addSizeChecks(b: *std.Build, host_mod: *std.Build.Module, sqlite_dep: *std.Bu
             .root_module = b.createModule(.{
                 .root_source_file = b.path(b.fmt("tests/size/{s}.zig", .{v.name})),
                 .target = target,
-                .optimize = .ReleaseSmall,
+                .optimize = .small,
                 .strip = strip,
                 .imports = &.{.{ .name = "zastra", .module = z }},
             }),
@@ -198,7 +198,9 @@ fn addCompileFailTests(b: *std.Build, test_step: *std.Build.Step) void {
     const step = b.step("compile-fail", "Run compile-fail tests only");
     test_step.dependOn(step);
 
-    var dir = b.build_root.handle.openDir(io, "tests/compile_fail", .{ .iterate = true }) catch |err| {
+    // The case list and each case's expect lines are read while configuring.
+    b.dependOnDirectoryContents(b.path("tests/compile_fail"));
+    var dir = b.root.openDir(io, "tests/compile_fail", .{ .iterate = true }) catch |err| {
         std.debug.panic("zastra: can't open tests/compile_fail: {t}", .{err});
     };
     defer dir.close(io);
@@ -207,6 +209,7 @@ fn addCompileFailTests(b: *std.Build, test_step: *std.Build.Step) void {
     while (it.next(io) catch |err| std.debug.panic("zastra: listing tests/compile_fail: {t}", .{err})) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".zig")) continue;
         const name = b.dupe(entry.name);
+        b.dependOnFileContents(b.path(b.fmt("tests/compile_fail/{s}", .{name})));
         const src = dir.readFileAlloc(io, name, b.allocator, .limited(1 << 20)) catch |err| {
             std.debug.panic("zastra: reading compile-fail case {s}: {t}", .{ name, err });
         };
@@ -252,7 +255,7 @@ pub fn addDev(b: *std.Build, opts: DevOptions) Dev {
         .root_module = b.createModule(.{
             .root_source_file = opts.zastra.path("build/dev.zig"),
             .target = opts.app.resolved_target orelse b.graph.host,
-            .optimize = opts.app.optimize orelse .Debug,
+            .optimize = opts.app.optimize orelse .debug,
             .imports = &.{
                 .{ .name = "zastra", .module = opts.zastra.module("zastra") },
                 .{ .name = "app", .module = opts.app },
@@ -269,7 +272,7 @@ pub const CLibOptions = struct {
     name: []const u8,
     app: *std.Build.Module,
     zastra: *std.Build.Dependency,
-    linkage: std.builtin.LinkMode = .dynamic,
+    linkage: std.lang.LinkMode = .dynamic,
 };
 
 pub const CLib = struct {
@@ -289,7 +292,7 @@ pub fn addCLib(b: *std.Build, opts: CLibOptions) CLib {
         .root_module = b.createModule(.{
             .root_source_file = opts.zastra.path("build/clib.zig"),
             .target = target,
-            .optimize = opts.app.optimize orelse .Debug,
+            .optimize = opts.app.optimize orelse .debug,
             .link_libc = true,
             .imports = &.{
                 .{ .name = "zastra", .module = opts.zastra.module("zastra") },

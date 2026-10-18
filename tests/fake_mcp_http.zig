@@ -180,18 +180,18 @@ pub const Fake = struct {
 
     fn legacy(f: *Fake, a: std.mem.Allocator, req: *std.http.Server.Request, method: []const u8, id: i64, session: []const u8) !void {
         _ = f;
-        if (std.mem.eql(u8, method, "initialize")) return json(req, try std.fmt.allocPrint(a,
+        if (std.mem.eql(u8, method, "initialize")) return json(req, try a.print(
             \\{{"jsonrpc":"2.0","id":{d},"result":{{"protocolVersion":"2025-11-25","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"legacy","version":"1"}}}}}}
         , .{id}), &.{.{ .name = "mcp-session-id", .value = "sess-1" }});
         if (!std.mem.eql(u8, session, "sess-1"))
             return req.respond("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32000,\"message\":\"Bad Request: No valid session ID provided\"},\"id\":null}", .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-        if (std.mem.eql(u8, method, "tools/list")) return json(req, try std.fmt.allocPrint(a,
+        if (std.mem.eql(u8, method, "tools/list")) return json(req, try a.print(
             \\{{"jsonrpc":"2.0","id":{d},"result":{{"tools":[{{"name":"wiki","description":"Ask the wiki.","inputSchema":{{"type":"object","properties":{{"q":{{"type":"string"}}}},"required":["q"]}}}}]}}}}
         , .{id}), &.{});
-        if (std.mem.eql(u8, method, "tools/call")) return json(req, try std.fmt.allocPrint(a,
+        if (std.mem.eql(u8, method, "tools/call")) return json(req, try a.print(
             \\{{"jsonrpc":"2.0","id":{d},"result":{{"content":[{{"type":"text","text":"legacy answer"}}]}}}}
         , .{id}), &.{});
-        return json(req, try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32601,\"message\":\"no such method\"}}}}", .{id}), &.{});
+        return json(req, try a.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32601,\"message\":\"no such method\"}}}}", .{id}), &.{});
     }
 
     fn modern(f: *Fake, a: std.mem.Allocator, req: *std.http.Server.Request, method: []const u8, id: i64, params: std.json.Value, seen: Seen) !void {
@@ -205,14 +205,14 @@ pub const Fake = struct {
         const name_body = if (params == .object) (if (params.object.get("name")) |n| n.string else "") else "";
         const name_ok = !std.mem.eql(u8, method, "tools/call") or std.mem.eql(u8, decodeHeader(a, seen.mcp_name), name_body);
         if (!std.mem.eql(u8, seen.protocol_version, meta_version) or !std.mem.eql(u8, seen.mcp_method, method) or !name_ok)
-            return req.respond(try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32020,\"message\":\"Header mismatch\"}}}}", .{id}), .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
+            return req.respond(try a.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32020,\"message\":\"Header mismatch\"}}}}", .{id}), .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
 
-        if (std.mem.eql(u8, method, "server/discover")) return json(req, try std.fmt.allocPrint(a,
+        if (std.mem.eql(u8, method, "server/discover")) return json(req, try a.print(
             \\{{"jsonrpc":"2.0","id":{d},"result":{{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{{"tools":{{"listChanged":true}}}}}}}}
         , .{id}), &.{});
         if (std.mem.eql(u8, method, "tools/list")) {
             _ = f.lists.fetchAdd(1, .monotonic);
-            return json(req, try std.fmt.allocPrint(a,
+            return json(req, try a.print(
                 \\{{"jsonrpc":"2.0","id":{d},"result":{{"resultType":"complete","ttlMs":60000,"tools":[
                 \\{{"name":"lookup","description":"Look up a city.","inputSchema":{{"type":"object","properties":{{"city":{{"type":"string","x-mcp-header":"City"}},"limit":{{"type":"integer","x-mcp-header":"Limit"}}}},"required":["city"]}}}},
                 \\{{"name":"bad_header","description":"Invalid x-mcp-header.","inputSchema":{{"type":"object","properties":{{"x":{{"type":"number","x-mcp-header":"X"}}}}}}}},
@@ -240,7 +240,7 @@ pub const Fake = struct {
         if (std.mem.eql(u8, method, "tools/call")) {
             if (std.mem.eql(u8, name_body, "grow")) {
                 f.grown.store(true, .release);
-                return json(req, try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"result\":{{\"resultType\":\"complete\",\"content\":[{{\"type\":\"text\",\"text\":\"grown\"}}]}}}}", .{id}), &.{});
+                return json(req, try a.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"result\":{{\"resultType\":\"complete\",\"content\":[{{\"type\":\"text\",\"text\":\"grown\"}}]}}}}", .{id}), &.{});
             }
             // `lookup`: an SSE response with a progress notification first.
             var buf: [1024]u8 = undefined;
@@ -249,7 +249,7 @@ pub const Fake = struct {
             try bw.writer.print("data: {{\"jsonrpc\":\"2.0\",\"id\":{d},\"result\":{{\"resultType\":\"complete\",\"content\":[{{\"type\":\"text\",\"text\":\"sunny\"}}]}}}}\n\n", .{id});
             return bw.end();
         }
-        return req.respond(try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32601,\"message\":\"Method not found\"}}}}", .{id}), .{ .status = .not_found, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
+        return req.respond(try a.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32601,\"message\":\"Method not found\"}}}}", .{id}), .{ .status = .not_found, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
     }
 
     fn decodeHeader(a: std.mem.Allocator, v: []const u8) []const u8 {

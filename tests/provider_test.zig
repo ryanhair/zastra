@@ -218,7 +218,7 @@ test "openai: every event of one chunk arrives, in order, and made-up tool ids m
         .finish => |f| break f,
     } else return error.NoFinish;
 
-    try t.expectEqualStrings("rt" ++ "sa" ** 10, kinds.items);
+    try t.expectEqualStrings("rt" ++ repeat("sa", 10), kinds.items);
     const bs = fin.message.content.blocks;
     try t.expectEqual(z.FinishReason.tool_use, fin.reason);
     try t.expectEqual(@as(usize, 12), bs.len);
@@ -301,7 +301,7 @@ test "idle timeout: a stream that goes silent fails with Timeout" {
 
     var h: P.http.Http = try .init(t.allocator, t.io, .{ .idle_timeout_ms = 100, .max_retries = 0 }, null);
     defer h.deinit();
-    const url = try std.fmt.allocPrint(arena.allocator(), "http://127.0.0.1:{d}", .{server.socket.address.getPort()});
+    const url = try arena.allocator().print("http://127.0.0.1:{d}", .{server.socket.address.getPort()});
     var diag: P.Diagnostic = .{};
     const prefix = comptime P.anthropic.buildPrefix(.{ .spec = spec("anthropic/claude-haiku-4-5") });
     var text: std.ArrayList(u8) = .empty;
@@ -360,7 +360,7 @@ test "openai responses: streaming text, request shape and usage" {
     try t.expectEqual(z.FinishReason.end_turn, f.reason);
     try t.expectEqual(@as(u64, 19), f.usage.input_tokens);
     try t.expectEqual(@as(u64, 10), f.usage.output_tokens);
-    const want = try std.fmt.allocPrint(a,
+    const want = try a.print(
         \\{{"model":"gpt-5.4-mini","stream":true,"store":false,"include":["reasoning.encrypted_content"],"instructions":"Be brief.","input":[{{"role":"user","content":"Hi"}}],"max_output_tokens":100,"prompt_cache_key":"zastra-{x}"}}
     , .{prefix.hash});
     try t.expectEqualStrings(want, rp.requests.items[0]);
@@ -498,4 +498,14 @@ test "openai responses: error response becomes a diagnostic" {
     req.diag = &diag;
     try t.expectError(error.BadRequest, P.openai_responses.Stream.open(arena.allocator(), &h, req));
     try t.expectEqualStrings("openai 400 invalid_request_error: Invalid 'max_output_tokens': integer below minimum value. Expected a value >= 16, but got 2 instead.", diag.message());
+}
+
+/// `s` repeated `n` times, at comptime.
+fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n]u8 {
+    return comptime blk: {
+        var out: [s.len * n]u8 = undefined;
+        for (0..n) |i| @memcpy(out[i * s.len ..][0..s.len], s);
+        const final = out;
+        break :blk &final;
+    };
 }

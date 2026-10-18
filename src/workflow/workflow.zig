@@ -74,7 +74,7 @@ fn checkNode(comptime Ctx: type, comptime wf: []const u8, comptime S: type) void
         } else if (step.isLoop(S)) {
             checkNode(Ctx, wf, S.body);
         } else if (step.isParallel(S)) {
-            for (std.meta.fields(@TypeOf(S.steps))) |f| step.checkStep(@field(S.steps, f.name), Ctx);
+            for (reflect.fields(@TypeOf(S.steps))) |f| step.checkStep(@field(S.steps, f.name), Ctx);
         } else {
             step.checkStep(S, Ctx);
         }
@@ -122,9 +122,9 @@ fn armsOf(comptime arms: anytype) []const Arm {
         const A = @TypeOf(arms);
         if (!reflect.isTuple(A)) errors.fail("`.branch(...)` takes a tuple of arms: `.{{ .{{ predicate, Step }}, .{{ z.otherwise, Other }} }}`", .{});
         var out: []const Arm = &.{};
-        for (0..std.meta.fields(A).len) |i| {
+        for (0..reflect.fields(A).len) |i| {
             const arm = arms[i];
-            if (!reflect.isTuple(@TypeOf(arm)) or std.meta.fields(@TypeOf(arm)).len != 2)
+            if (!reflect.isTuple(@TypeOf(arm)) or reflect.fields(@TypeOf(arm)).len != 2)
                 errors.fail("`.branch(...)` arm {d} must be `.{{ predicate, Step }}`", .{i});
             const p = arm[0];
             const Pred = if (@TypeOf(p) == type and p == step.otherwise) step.otherwise else struct {
@@ -149,7 +149,7 @@ fn checkBranch(comptime Ctx: type, comptime wf: []const u8, comptime nodes: []co
                 if (i != list.len - 1) errors.fail("workflow '{s}': `z.otherwise` must be the last branch arm", .{wf});
             } else {
                 const F = @TypeOf(arm.Pred.f);
-                if (@typeInfo(F) != .@"fn" or @typeInfo(F).@"fn".params.len != 1 or @typeInfo(F).@"fn".return_type != bool or @typeInfo(F).@"fn".params[0].type != Cur)
+                if (@typeInfo(F) != .@"fn" or @typeInfo(F).@"fn".param_types.len != 1 or @typeInfo(F).@"fn".return_type != bool or @typeInfo(F).@"fn".param_types[0] != Cur)
                     errors.fail("workflow '{s}': branch arm {d}'s predicate must be `fn ({s}) bool`", .{ wf, i, describe(Cur) });
             }
             if (Out) |O| {
@@ -283,13 +283,13 @@ fn analyzeStep(comptime wf: []const u8, comptime In: type, comptime S: type, com
         if (@hasDecl(S, "zastra_agent_step")) out.agents = &[_]type{S.zastra_agent_step};
         const members: []const type = if (step.isParallel(S)) blk: {
             var m: []const type = &.{};
-            for (std.meta.fields(@TypeOf(S.steps))) |f| m = m ++ &[_]type{@field(S.steps, f.name)};
+            for (reflect.fields(@TypeOf(S.steps))) |f| m = m ++ &[_]type{@field(S.steps, f.name)};
             break :blk m;
         } else &[_]type{S};
         for (members) |M| {
             if (@hasDecl(M, "zastra_agent_step")) out.agents = out.agents ++ &[_]type{M.zastra_agent_step};
             if (!@hasDecl(M, "needs")) continue;
-            for (std.meta.fields(@TypeOf(M.needs))) |f| {
+            for (reflect.fields(@TypeOf(M.needs))) |f| {
                 const R = @field(M.needs, f.name);
                 if (step.isInitial(R)) {
                     if (R.Type != In) errors.fail("step '{s}' needs the workflow input as `{s}`, but workflow '{s}' takes `{s}`", .{ step.idOf(M), describe(R.Type), wf, describe(In) });
@@ -326,7 +326,7 @@ fn inLoopBody(comptime L: type, comptime T: type) bool {
     if (B == T) return true;
     if (step.isWorkflow(B)) return contains(B.nodes, T);
     if (step.isLoop(B)) return inLoopBody(B, T);
-    if (step.isParallel(B)) for (std.meta.fields(@TypeOf(B.steps))) |f| {
+    if (step.isParallel(B)) for (reflect.fields(@TypeOf(B.steps))) |f| {
         if (@field(B.steps, f.name) == T) return true;
     };
     return false;

@@ -130,8 +130,8 @@ fn Run(comptime Ctx: type, comptime TI: type) type {
         }
 
         fn isModelError(err: anyerror) bool {
-            const set = @typeInfo(TI.ModelErrors).error_set orelse return false;
-            inline for (set) |e| if (std.mem.eql(u8, @errorName(err), e.name)) return true;
+            const set = @typeInfo(TI.ModelErrors).error_set.error_names orelse return false;
+            inline for (set) |name| if (std.mem.eql(u8, @errorName(err), name)) return true;
             return false;
         }
 
@@ -198,7 +198,7 @@ pub fn mutate(g: *arb.Gen, arena: Allocator, valid: []const u8) ![]const u8 {
         5 => if (randomObject(g, &root)) |o| {
             if (o.count() > 0) _ = o.orderedRemove(o.keys()[g.index(o.count())]);
         },
-        6 => if (randomObject(g, &root)) |o| try o.put(arena, if (o.count() > 0 and g.boolean()) try std.fmt.allocPrint(arena, "{s}_", .{o.keys()[0]}) else "unexpected", .{ .integer = 1 }),
+        6 => if (randomObject(g, &root)) |o| try o.put(arena, if (o.count() > 0 and g.boolean()) try arena.print("{s}_", .{o.keys()[0]}) else "unexpected", .{ .integer = 1 }),
         else => root = wrongType(g, arena, root),
     }
     return std.json.Stringify.valueAlloc(arena, root, .{});
@@ -281,7 +281,7 @@ fn checkOptions(comptime TI: type, comptime O: type) void {
     comptime {
         const who = "z.testing.fuzzTool(" ++ TI.type_name ++ ")";
         if (@typeInfo(O) != .@"struct") errors.fail("{s}: options must be a struct literal like `.{{ .ctx = &ctx, .iterations = 300 }}`", .{who});
-        for (std.meta.fields(O)) |f| {
+        for (reflect.fields(O)) |f| {
             var known = false;
             for (known_options) |k| if (std.mem.eql(u8, k, f.name)) {
                 known = true;
@@ -291,11 +291,11 @@ fn checkOptions(comptime TI: type, comptime O: type) void {
         if (!@hasField(O, "ctx")) errors.fail("{s}: pass `.ctx = &ctx`, the context the tool runs with", .{who});
 
         const names = reflect.fieldNames(tool_mod.Effect);
-        var allowed = tool_mod.Effects.initEmpty();
+        var allowed = tool_mod.Effects.empty;
         if (@hasField(O, "allow_effects")) {
             const A = @FieldType(O, "allow_effects");
             if (!reflect.isTuple(A)) errors.fail("{s}: `.allow_effects` must be a tuple of effects like `.{{ .writes }}`", .{who});
-            const defaults = std.meta.fields(A);
+            const defaults = reflect.fields(A);
             for (defaults) |f| {
                 if (f.type != @TypeOf(.enum_literal)) errors.fail("{s}: `.allow_effects` entries must be effect names like `.writes`", .{who});
                 const tag = @tagName(f.defaultValue().?);

@@ -100,6 +100,16 @@ test "z.Json nested past the stringify limit is a validation issue, not a crash"
     try std.testing.expectError(error.ValidationFailed, parse.parse(T, a, text.items, &issue));
     try std.testing.expectEqualStrings("$.j", issue.path);
     // At the limit it still works.
-    const ok = "{\"j\":" ++ "[" ** 256 ++ "]" ** 256 ++ "}";
+    const ok = "{\"j\":" ++ repeat("[", 256) ++ repeat("]", 256) ++ "}";
     _ = try parse.parse(T, a, ok, &issue);
+}
+
+/// `s` repeated `n` times, at comptime.
+fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n]u8 {
+    return comptime blk: {
+        var out: [s.len * n]u8 = undefined;
+        for (0..n) |i| @memcpy(out[i * s.len ..][0..s.len], s);
+        const final = out;
+        break :blk &final;
+    };
 }

@@ -39,7 +39,7 @@ while (try stream.next()) |event| switch (event) {
 
 ## Requirements
 
-Zig **0.16.x**. zastra uses the `std.Io` model throughout (`std.process.Init`, `io.async`, `Future.cancel`).
+Zig **0.17.x**. zastra uses the `std.Io` model throughout (`std.process.Init`, `io.async`, `Future.cancel`).
 
 ## Getting started
 
@@ -52,7 +52,7 @@ zig build dev -- agents              # what the App declares
 zig build dev -- graph handle_ticket # Mermaid
 ANTHROPIC_API_KEY=... OPENAI_API_KEY=... zig build dev -- chat support
 zig build lib                        # libsupport + support.h
-zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
+zig build -Dtarget=aarch64-linux-musl -Doptimize=small
 ```
 
 ## Developing zastra
@@ -61,7 +61,7 @@ zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
 zig build test                  # unit, integration, golden and compile-fail tests
 zig build golden -- --update    # refresh golden files
 zig build compile-fail          # compile-fail tests only
-zig build size                  # binary-size budgets (aarch64-linux-musl, ReleaseSmall)
+zig build size                  # binary-size budgets (aarch64-linux-musl, -Doptimize=small)
 zig build models-update         # regenerate the model catalog from tools/models-update/sources.json
 zig build docs                  # API reference into zig-out/docs
 ```

@@ -52,7 +52,7 @@ pub const SqliteStore = struct {
     mutex: Io.Mutex = .init,
 
     pub fn open(gpa: Allocator, io: Io, path: []const u8) Error!SqliteStore {
-        const z_path = try gpa.dupeZ(u8, path);
+        const z_path = try gpa.dupeSentinel(u8, path, 0);
         defer gpa.free(z_path);
         var db: ?*sqlite3 = null;
         if (sqlite3_open_v2(z_path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, null) != SQLITE_OK) {
@@ -70,7 +70,7 @@ pub const SqliteStore = struct {
         for (migrations[@min(current, migrations.len)..], current..) |sql, i| {
             try s.exec("BEGIN;");
             errdefer s.exec("ROLLBACK;") catch {};
-            const z = try gpa.dupeZ(u8, sql);
+            const z = try gpa.dupeSentinel(u8, sql, 0);
             defer gpa.free(z);
             try s.exec(z);
             try s.exec("DELETE FROM schema_version;");

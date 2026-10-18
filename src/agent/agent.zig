@@ -55,7 +55,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
         if (@hasField(C, "tools")) {
             const TT = @TypeOf(cfg.tools);
             if (!reflect.isTuple(TT)) errors.fail("{s}: `.tools` must be a tuple of tool types, like `.{{ LookupOrder, IssueRefund }}`", .{who});
-            for (0..std.meta.fields(TT).len) |i| {
+            for (0..reflect.fields(TT).len) |i| {
                 const x = cfg.tools[i];
                 if (@TypeOf(x) != type) errors.fail("{s}: `.tools` entry {d} is a value of type {s}, not a tool type", .{ who, i, @typeName(@TypeOf(x)) });
                 if (mcp.isToolSet(x)) {
@@ -74,10 +74,10 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
 
         // ── effects (§5.12) ──────────────────────────────────────────────
         if (@hasField(C, "allow")) {
-            var allowed = tool.Effects.initEmpty();
+            var allowed = tool.Effects.empty;
             const AT = @TypeOf(cfg.allow);
             if (!reflect.isTuple(AT)) errors.fail("{s}: `.allow` must be a tuple of effects like `.{{ .reads, .network }}`", .{who});
-            for (0..std.meta.fields(AT).len) |i| {
+            for (0..reflect.fields(AT).len) |i| {
                 const tag = @tagName(cfg.allow[i]);
                 const e = std.meta.stringToEnum(tool.Effect, tag) orelse errors.fail("{s}: `.allow` has unknown effect `.{s}`{s}", .{ who, tag, errors.didYouMean(tag, reflect.fieldNames(tool.Effect)) });
                 allowed.insert(e);
@@ -123,7 +123,7 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
                 if (@TypeOf(cfg.memory.working) != type or @typeInfo(cfg.memory.working) != .@"struct")
                     errors.fail("{s}: `.memory.working` must be a struct type", .{who});
                 Working_ = cfg.memory.working;
-                for (std.meta.fields(Working_)) |f| if (f.default_value_ptr == null)
+                for (reflect.fields(Working_)) |f| if (f.default_value_ptr == null)
                     errors.fail("{s}: working memory field `{s}.{s}` needs a default value (working memory starts empty)", .{ who, reflect.shortTypeName(Working_), f.name });
                 if (!spec.supports.tools) errors.fail("{s}: working memory needs a model with tool use", .{who});
                 migrate.check(Working_, who);
@@ -154,14 +154,14 @@ pub fn Agent(comptime Ctx_: type, comptime cfg: anytype) type {
             const E = @TypeOf(cfg.examples);
             const n = switch (@typeInfo(E)) {
                 .pointer => cfg.examples.len,
-                else => std.meta.fields(E).len,
+                else => reflect.fields(E).len,
             };
             var text: []const u8 = "\n\nExamples:";
             for (0..n) |i| {
                 const ex = cfg.examples[i];
                 if (!@hasField(@TypeOf(ex), "in") or !@hasField(@TypeOf(ex), "out")) errors.fail("{s}: example {d} needs `.in` and `.out`", .{ who, i });
                 const O = @TypeOf(ex.out);
-                if (O != Output_ and @typeInfo(O) == .@"struct") for (std.meta.fields(O)) |f| {
+                if (O != Output_ and @typeInfo(O) == .@"struct") for (reflect.fields(O)) |f| {
                     if (!@hasField(Output_, f.name)) errors.fail("{s}: example {d}'s `.out` has field `{s}`, which is not a field of {s}{s}", .{
                         who, i, f.name, reflect.shortTypeName(Output_), errors.didYouMean(f.name, reflect.fieldNames(Output_)),
                     });
@@ -348,7 +348,7 @@ fn resolveReasoning(comptime cfg: anytype, comptime spec: catalog.Spec, comptime
                 if (std.mem.eql(u8, tag, "off")) break :blk .off;
                 errors.fail("{s}: unknown `.reasoning = .{s}`{s}; use `.default`, `.on`, `.off` or `.{{ .budget = N }}`", .{ who, tag, errors.didYouMean(tag, &.{ "default", "on", "off", "budget" }) });
             }
-            if (@typeInfo(R) == .@"struct" and std.meta.fields(R).len == 1 and @hasField(R, "budget"))
+            if (@typeInfo(R) == .@"struct" and reflect.fields(R).len == 1 and @hasField(R, "budget"))
                 break :blk .{ .budget = cfg.reasoning.budget };
             errors.fail("{s}: `.reasoning` must be `.default`, `.on`, `.off` or `.{{ .budget = N }}`", .{who});
         };

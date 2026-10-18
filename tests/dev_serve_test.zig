@@ -88,7 +88,7 @@ const Fixture = struct {
 
     fn init(f: *Fixture, opts: z.dev.ServeOptions) !void {
         std.Io.Dir.cwd().createDirPath(t.io, ".zig-cache/tmp") catch {};
-        f.trace_path = try std.fmt.allocPrint(t.allocator, ".zig-cache/tmp/zastra-serve-{d}.jsonl", .{Io.Clock.real.now(t.io).nanoseconds});
+        f.trace_path = try t.allocator.print(".zig-cache/tmp/zastra-serve-{d}.jsonl", .{Io.Clock.real.now(t.io).nanoseconds});
         f.trace_file = try Io.Dir.cwd().createFile(t.io, f.trace_path, .{});
         f.h = try z.testing.harness(App, .{ .ctx = &f.ctx, .tracing = .{ .jsonl = .{ .file = f.trace_file, .append = true } } });
         var o = opts;
@@ -112,7 +112,7 @@ const Fixture = struct {
         var client: std.http.Client = .{ .allocator = t.allocator, .io = t.io };
         defer client.deinit();
         var aw: Io.Writer.Allocating = .init(arena);
-        const url = try std.fmt.allocPrint(arena, "http://127.0.0.1:{d}{s}", .{ f.srv.port(), path });
+        const url = try arena.print("http://127.0.0.1:{d}{s}", .{ f.srv.port(), path });
         const r = try client.fetch(.{
             .location = .{ .url = url },
             .method = method,
@@ -273,21 +273,21 @@ test "dev serve: an approval suspends the stream; resume/stream continues it" {
     r = try f.get(a, "/api/runs?status=suspended&kind=agent");
     try t.expectEqualStrings(run_id, (try field(a, r.body, &.{ "#0", "run_id" })).string);
     try t.expect((try field(a, r.body, &.{ "#0", "resumable" })).bool);
-    r = try f.get(a, try std.fmt.allocPrint(a, "/api/runs/{s}", .{run_id}));
+    r = try f.get(a, try a.print("/api/runs/{s}", .{run_id}));
     try t.expectEqualStrings("suspended", (try field(a, r.body, &.{"status"})).string);
 
     f.h.script(Refunder, &.{.text("Refunded.")});
-    r = try f.post(a, try std.fmt.allocPrint(a, "/api/runs/{s}/resume/stream", .{run_id}), try std.fmt.allocPrint(a, "{{\"decisions\":[{{\"id\":\"{s}\",\"approve\":true}}]}}", .{call_id}));
+    r = try f.post(a, try a.print("/api/runs/{s}/resume/stream", .{run_id}), try a.print("{{\"decisions\":[{{\"id\":\"{s}\",\"approve\":true}}]}}", .{call_id}));
     events = try sse(a, r.body);
     try t.expectEqualStrings("tool_result,step_finish,text_delta,step_finish,finish,result", try kinds(a, events));
     try t.expectEqual(1, f.ctx.refunds.load(.acquire));
 
     // Resuming again: the run is done.
-    r = try f.post(a, try std.fmt.allocPrint(a, "/api/runs/{s}/resume", .{run_id}), "{}");
+    r = try f.post(a, try a.print("/api/runs/{s}/resume", .{run_id}), "{}");
     try t.expectEqual(.conflict, r.status);
 
     // The run's spans are in the trace file.
-    r = try f.get(a, try std.fmt.allocPrint(a, "/api/traces/{s}", .{run_id}));
+    r = try f.get(a, try a.print("/api/traces/{s}", .{run_id}));
     try t.expectEqual(.ok, r.status);
     try t.expect((try std.json.parseFromSliceLeaky(std.json.Value, a, r.body, .{})).array.items.len >= 3);
 }
@@ -303,19 +303,19 @@ test "dev serve: workflows start, suspend, resume and cancel" {
     var r = try f.post(a, "/api/workflows/refund_flow/start", "{\"input\":{\"order_id\":\"A\",\"cents\":5}}");
     try t.expectEqualStrings("suspended", (try field(a, r.body, &.{"status"})).string);
     const run_id = try a.dupe(u8, (try field(a, r.body, &.{"run_id"})).string);
-    r = try f.post(a, try std.fmt.allocPrint(a, "/api/runs/{s}/resume", .{run_id}), "{\"value\":{\"approved\":true}}");
+    r = try f.post(a, try a.print("/api/runs/{s}/resume", .{run_id}), "{\"value\":{\"approved\":true}}");
     try t.expectEqual(.bad_request, r.status);
-    r = try f.post(a, try std.fmt.allocPrint(a, "/api/runs/{s}/resume", .{run_id}), "{\"step\":\"elsewhere\",\"value\":{\"approved\":true,\"by\":\"ryan\"}}");
+    r = try f.post(a, try a.print("/api/runs/{s}/resume", .{run_id}), "{\"step\":\"elsewhere\",\"value\":{\"approved\":true,\"by\":\"ryan\"}}");
     try t.expectEqual(.conflict, r.status);
-    r = try f.post(a, try std.fmt.allocPrint(a, "/api/runs/{s}/resume", .{run_id}), "{\"value\":{\"approved\":true,\"by\":\"ryan\"}}");
+    r = try f.post(a, try a.print("/api/runs/{s}/resume", .{run_id}), "{\"value\":{\"approved\":true,\"by\":\"ryan\"}}");
     try t.expectEqualStrings("completed", (try field(a, r.body, &.{"status"})).string);
     try t.expectEqualStrings("ryan", (try field(a, r.body, &.{ "output", "by" })).string);
 
     r = try f.post(a, "/api/workflows/refund_flow/start", "{\"input\":{\"order_id\":\"B\",\"cents\":5}}");
     const second = try a.dupe(u8, (try field(a, r.body, &.{"run_id"})).string);
-    r = try f.post(a, try std.fmt.allocPrint(a, "/api/runs/{s}/cancel", .{second}), "");
+    r = try f.post(a, try a.print("/api/runs/{s}/cancel", .{second}), "");
     try t.expectEqual(.ok, r.status);
-    r = try f.post(a, try std.fmt.allocPrint(a, "/api/runs/{s}/cancel", .{second}), "");
+    r = try f.post(a, try a.print("/api/runs/{s}/cancel", .{second}), "");
     try t.expectEqual(.conflict, r.status);
     r = try f.get(a, "/api/runs/nope");
     try t.expectEqual(.not_found, r.status);
@@ -455,8 +455,8 @@ test "dev serve: every response shape (golden)" {
     const record = struct {
         fn record(fx: *Fixture, aa: std.mem.Allocator, l: *std.ArrayList(u8), c: Call) ![]const u8 {
             const r = try fx.call(aa, c.m, c.path, c.body, &.{}, null);
-            const head = try std.fmt.allocPrint(aa, "### {t} {s}{s}{s}", .{ c.m, c.path, if (c.body != null) " " else "", c.body orelse "" });
-            try l.print(aa, "{s}\n{d}\n{s}\n\n", .{ try scrub(aa, head), @intFromEnum(r.status), try scrub(aa, r.body) });
+            const head = try aa.print("### {t} {s}{s}{s}", .{ c.m, c.path, if (c.body != null) " " else "", c.body orelse "" });
+            try l.print(aa, "{s}\n{d}\n{s}\n\n", .{ try scrub(aa, head), @backingInt(r.status), try scrub(aa, r.body) });
             return r.body;
         }
     }.record;
@@ -475,22 +475,22 @@ test "dev serve: every response shape (golden)" {
     const run_id = (try field(a, ev[ev.len - 1].data, &.{"run_id"})).string;
     const call_id = (try field(a, ev[ev.len - 1].data, &.{ "requests", "#0", "id" })).string;
     _ = try record(&f, a, &log, .{ .m = .GET, .path = "/api/runs?kind=agent" });
-    _ = try record(&f, a, &log, .{ .m = .GET, .path = try std.fmt.allocPrint(a, "/api/runs/{s}", .{run_id}) });
+    _ = try record(&f, a, &log, .{ .m = .GET, .path = try a.print("/api/runs/{s}", .{run_id}) });
     f.h.script(Refunder, &.{.text("Refunded.")});
-    _ = try record(&f, a, &log, .{ .m = .POST, .path = try std.fmt.allocPrint(a, "/api/runs/{s}/resume", .{run_id}), .body = try std.fmt.allocPrint(a, "{{\"decisions\":[{{\"id\":\"{s}\",\"approve\":true}}]}}", .{call_id}) });
+    _ = try record(&f, a, &log, .{ .m = .POST, .path = try a.print("/api/runs/{s}/resume", .{run_id}), .body = try a.print("{{\"decisions\":[{{\"id\":\"{s}\",\"approve\":true}}]}}", .{call_id}) });
     const started = try record(&f, a, &log, .{ .m = .POST, .path = "/api/workflows/refund_flow/start", .body = "{\"input\":{\"order_id\":\"A\",\"cents\":5}}" });
     const wf_run = (try field(a, started, &.{"run_id"})).string;
-    _ = try record(&f, a, &log, .{ .m = .POST, .path = try std.fmt.allocPrint(a, "/api/runs/{s}/resume", .{wf_run}), .body = "{\"value\":{\"approved\":true,\"by\":\"ryan\"}}" });
+    _ = try record(&f, a, &log, .{ .m = .POST, .path = try a.print("/api/runs/{s}/resume", .{wf_run}), .body = "{\"value\":{\"approved\":true,\"by\":\"ryan\"}}" });
     const second = try record(&f, a, &log, .{ .m = .POST, .path = "/api/workflows/refund_flow/start", .body = "{\"input\":{\"order_id\":\"B\",\"cents\":5}}" });
-    _ = try record(&f, a, &log, .{ .m = .POST, .path = try std.fmt.allocPrint(a, "/api/runs/{s}/cancel", .{(try field(a, second, &.{"run_id"})).string}), .body = "" });
+    _ = try record(&f, a, &log, .{ .m = .POST, .path = try a.print("/api/runs/{s}/cancel", .{(try field(a, second, &.{"run_id"})).string}), .body = "" });
     // The same approval, continued as a stream.
     f.h.script(Refunder, &.{.tool(IssueRefund, .{ .order_id = "ORD-2", .amount_cents = 10_00 })});
     const susp2 = try sse(a, (try f.post(a, "/api/agents/refunder/stream", "{\"input\":\"Refund ORD-2.\"}")).body);
     const run2 = (try field(a, susp2[susp2.len - 1].data, &.{"run_id"})).string;
     const call2 = (try field(a, susp2[susp2.len - 1].data, &.{ "requests", "#0", "id" })).string;
     f.h.script(Refunder, &.{.text("Done.")});
-    _ = try record(&f, a, &log, .{ .m = .POST, .path = try std.fmt.allocPrint(a, "/api/runs/{s}/resume/stream", .{run2}), .body = try std.fmt.allocPrint(a, "{{\"decisions\":[{{\"id\":\"{s}\",\"deny\":\"Too much.\"}}]}}", .{call2}) });
-    _ = try record(&f, a, &log, .{ .m = .GET, .path = try std.fmt.allocPrint(a, "/api/traces/{s}", .{run2}) });
+    _ = try record(&f, a, &log, .{ .m = .POST, .path = try a.print("/api/runs/{s}/resume/stream", .{run2}), .body = try a.print("{{\"decisions\":[{{\"id\":\"{s}\",\"deny\":\"Too much.\"}}]}}", .{call2}) });
+    _ = try record(&f, a, &log, .{ .m = .GET, .path = try a.print("/api/traces/{s}", .{run2}) });
     _ = try record(&f, a, &log, .{ .m = .POST, .path = "/api/agents/refunder/generate", .body = "{\"input\":7}" });
     _ = try record(&f, a, &log, .{ .m = .GET, .path = "/api/runs/nope" });
 

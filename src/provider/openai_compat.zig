@@ -204,7 +204,7 @@ pub const path = "/chat/completions";
 pub fn auth(arena: Allocator, api_key: ?[]const u8) Allocator.Error![]const std.http.Header {
     const k = api_key orelse return &.{};
     const hs = try arena.alloc(std.http.Header, 1);
-    hs[0] = .{ .name = "authorization", .value = try std.fmt.allocPrint(arena, "Bearer {s}", .{k}) };
+    hs[0] = .{ .name = "authorization", .value = try arena.print("Bearer {s}", .{k}) };
     return hs;
 }
 
@@ -279,7 +279,7 @@ pub fn onEvent(st: *State, _: sse.Event, v: std.json.Value, out: *stream.Out) p.
         if (!st.tool_ids.contains(idx)) {
             const sent = p.getStr(tc, "id") orelse "";
             // Some servers send no id; the delta and the message share the made-up one.
-            const id = if (sent.len > 0) sent else std.fmt.allocPrint(out.arena, "call_{d}", .{idx}) catch return error.OutOfMemory;
+            const id = if (sent.len > 0) sent else out.arena.print("call_{d}", .{idx}) catch return error.OutOfMemory;
             const fname = if (f) |ff| p.getStr(ff, "name") orelse "" else "";
             try b.startToolUse(idx, id, fname);
             st.tool_ids.put(out.arena, idx, {}) catch return error.OutOfMemory;

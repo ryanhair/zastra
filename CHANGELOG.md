@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+- **Zig 0.17.x is required** (was 0.16.x). The API is unchanged. Apps need the usual 0.17 build-script changes, e.g. `run.addPassthruArgs()` instead of `if (b.args) |args| run.addArgs(args)` (D55).
+
+### Added
+- Coverage-guided fuzzing works: `zig build test --fuzz` runs the parser, the round-trip property and `z.testing.fuzzTool` (with `.smith`) under the fuzzer. CI runs 10K iterations per fuzz test.
+
 ## v1.3.0 (2026-10-17)
 
 ### Breaking changes

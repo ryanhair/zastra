@@ -36,7 +36,7 @@ pub fn App(comptime cfg: anytype) type {
         if (@hasField(C, "agents")) {
             const T = @TypeOf(cfg.agents);
             if (!reflect.isTuple(T)) errors.fail("z.App(...): `.agents` must be a tuple of agent types, like `.{{ Support, TriageAgent }}`", .{});
-            for (0..std.meta.fields(T).len) |i| {
+            for (0..reflect.fields(T).len) |i| {
                 const A = cfg.agents[i];
                 if (@TypeOf(A) != type or !agent_mod.isAgent(A)) errors.fail("z.App(...): `.agents` entry {d} is not an agent; create agents with `z.Agent(Ctx, .{{ ... }})`", .{i});
                 if (A.Ctx != Ctx) errors.fail("z.App(...): agent '{s}' was declared with context {s}, but the App's `.ctx` is {s}", .{ A.id, @typeName(A.Ctx), @typeName(Ctx) });
@@ -51,7 +51,7 @@ pub fn App(comptime cfg: anytype) type {
             const T = @TypeOf(cfg.workflows);
             if (!reflect.isTuple(T)) errors.fail("z.App(...): `.workflows` must be a tuple of workflow types", .{});
             const wf = @import("workflow/workflow.zig");
-            for (0..std.meta.fields(T).len) |i| {
+            for (0..reflect.fields(T).len) |i| {
                 const W = cfg.workflows[i];
                 wf.checkRegistrable(W, Ctx);
                 for (workflow_list) |V| if (std.mem.eql(u8, W.id, V.id)) errors.fail("z.App(...): two workflows are named '{s}'", .{W.id});
@@ -72,7 +72,7 @@ pub fn App(comptime cfg: anytype) type {
         var mcp_names: []const []const u8 = &.{};
         var mcp_transports: []const mcp_decl.Transport = &.{};
         if (@hasField(C, "mcp")) {
-            for (std.meta.fields(@TypeOf(cfg.mcp))) |f| {
+            for (reflect.fields(@TypeOf(cfg.mcp))) |f| {
                 mcp_names = mcp_names ++ &[_][]const u8{f.name};
                 mcp_transports = mcp_transports ++ &[_]mcp_decl.Transport{@field(cfg.mcp, f.name)};
             }

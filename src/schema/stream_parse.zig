@@ -270,7 +270,7 @@ pub fn Parser(comptime T: type) type {
 pub fn lenient(comptime T: type, arena: Allocator, v: Value) Allocator.Error!Partial(T) {
     var out: Partial(T) = .{};
     if (v != .object) return out;
-    inline for (std.meta.fields(T)) |f| if (v.object.get(f.name)) |fv| {
+    inline for (reflect.fields(T)) |f| if (v.object.get(f.name)) |fv| {
         const Inner = switch (@typeInfo(f.type)) {
             .optional => |o| o.child,
             else => f.type,
@@ -351,7 +351,7 @@ test "stream_strings fields grow; other strings appear whole" {
     const gpa = std.testing.allocator;
     var long: [200]u8 = undefined;
     @memset(&long, 'x');
-    const text = try std.fmt.allocPrint(gpa, "{{\"summary\":\"{s}\",\"category\":\"other\"}}", .{&long});
+    const text = try gpa.print("{{\"summary\":\"{s}\",\"category\":\"other\"}}", .{&long});
     defer gpa.free(text);
     var got = try collect(gpa, text, 10);
     defer {
@@ -375,7 +375,7 @@ test "stream_strings fields grow; other strings appear whole" {
 
 test "escapes and multibyte characters are never split" {
     const gpa = std.testing.allocator;
-    const body = "é" ** 40 ++ "\\u00e9\\n" ** 10;
+    const body = repeat("é", 40) ++ repeat("\\u00e9\\n", 10);
     const text = "{\"summary\":\"" ++ body ++ "\",\"category\":\"other\"}";
     for (1..8) |chunk| {
         var got = try collect(gpa, text, chunk);
@@ -405,4 +405,14 @@ test "text that isn't a JSON object produces nothing" {
     defer p.deinit();
     try std.testing.expect(try p.feed("Sure! Here's the answer: {\"category\":\"other\"}") == null);
     try std.testing.expect(p.dead);
+}
+
+/// `s` repeated `n` times, at comptime.
+fn repeat(comptime s: []const u8, comptime n: usize) *const [s.len * n]u8 {
+    return comptime blk: {
+        var out: [s.len * n]u8 = undefined;
+        for (0..n) |i| @memcpy(out[i * s.len ..][0..s.len], s);
+        const final = out;
+        break :blk &final;
+    };
 }

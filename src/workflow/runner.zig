@@ -8,6 +8,7 @@
 //! least once (D16).
 
 const std = @import("std");
+const reflect = @import("../meta/reflect.zig");
 const runtime = @import("../runtime.zig");
 const step = @import("step.zig");
 const wf_mod = @import("workflow.zig");
@@ -250,7 +251,7 @@ fn Exec(comptime W: type) type {
         fn fail(x: *X, path: []const u8, err: anyerror, comptime fmt: []const u8, args: anytype) Flow {
             x.failed_step = path;
             x.failed_err = err;
-            x.failed_msg = std.fmt.allocPrint(x.arena, fmt, args) catch "step failed";
+            x.failed_msg = x.arena.print(fmt, args) catch "step failed";
             return error.WorkflowStepFailed;
         }
 
@@ -316,7 +317,7 @@ fn Exec(comptime W: type) type {
 
         fn buildNeeds(comptime S: type, comptime avail: []const Avail, comptime Initial: type, x: *X, initial: Initial) step.NeedsOf(S) {
             var needs: step.NeedsOf(S) = undefined;
-            if (@hasDecl(S, "needs")) inline for (std.meta.fields(@TypeOf(S.needs))) |f| {
+            if (@hasDecl(S, "needs")) inline for (reflect.fields(@TypeOf(S.needs))) |f| {
                 const R = @field(S.needs, f.name);
                 if (comptime step.isInitial(R)) {
                     @field(needs, f.name) = initial;
@@ -435,8 +436,8 @@ fn Exec(comptime W: type) type {
         }
 
         fn inSet(comptime E: type, err: anyerror) bool {
-            const set = @typeInfo(E).error_set orelse return true;
-            inline for (set) |e| if (std.mem.eql(u8, e.name, @errorName(err))) return true;
+            const set = @typeInfo(E).error_set.error_names orelse return true;
+            inline for (set) |name| if (std.mem.eql(u8, name, @errorName(err))) return true;
             return false;
         }
 
@@ -464,7 +465,7 @@ fn Exec(comptime W: type) type {
                         .fail => return x.fail(path, error.LoopLimit, "workflow '{s}': loop '{s}' reached its limit of {d} iterations without `until` returning true", .{ W.id, path, L.max }),
                     };
                 }
-                x.iteration = try std.fmt.allocPrint(x.arena, "{s}@{d}", .{ outer, iter });
+                x.iteration = try x.arena.print("{s}@{d}", .{ outer, iter });
                 const out = try execStep(L.body, path, avail, Initial, x, initial, cur);
                 iter += 1;
                 inline for (W.slots) |sl| {
@@ -481,7 +482,7 @@ fn Exec(comptime W: type) type {
         /// earliest real failure. Each branch works on its own copy of `X`
         /// with its own arena, so branches never write shared run state.
         fn execParallel(comptime P: type, comptime path: []const u8, comptime avail: []const Avail, comptime Initial: type, x: *X, initial: Initial, input: P.Input) Flow!P.Output {
-            const fields = std.meta.fields(@TypeOf(P.steps));
+            const fields = reflect.fields(@TypeOf(P.steps));
             const io = x.st.io;
             const Slot = struct {
                 arena: std.heap.ArenaAllocator,

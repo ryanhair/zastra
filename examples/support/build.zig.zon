@@ -2,7 +2,7 @@
     .name = .support,
     .version = "0.1.0",
     .fingerprint = 0x8004eba5028b0aeb,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zastra = .{ .path = "../.." },
     },

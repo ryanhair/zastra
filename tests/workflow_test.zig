@@ -337,7 +337,7 @@ test "sqlite: a suspended run survives a restart and resumes" {
     defer tmp.cleanup();
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = try tmp.dir.realPath(t.io, &path_buf);
-    const path = try std.fmt.allocPrint(t.allocator, "{s}/wf.sqlite", .{path_buf[0..n]});
+    const path = try t.allocator.print("{s}/wf.sqlite", .{path_buf[0..n]});
     defer t.allocator.free(path);
 
     var run_id_buf: [64]u8 = undefined;

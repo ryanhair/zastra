@@ -3,6 +3,7 @@
 //! the shared `zastra_*` ones. Used by `z.addCLib`.
 
 const std = @import("std");
+const reflect = @import("../meta/reflect.zig");
 const json = @import("../schema/json.zig");
 const parse = @import("../schema/parse.zig");
 const msg = @import("../message.zig");
@@ -45,7 +46,7 @@ pub const Event = extern struct {
 
 fn setErr(err: ?*Error, code: Status, comptime fmt: []const u8, args: anytype) void {
     const e = err orelse return;
-    e.code = @intFromEnum(code);
+    e.code = @backingInt(code);
     const s = std.fmt.bufPrint(e.message[0 .. e.message.len - 1], fmt, args) catch e.message[0 .. e.message.len - 1];
     e.message[s.len] = 0;
 }
@@ -69,7 +70,7 @@ const gpa = std.heap.c_allocator;
 
 fn makeResult(bytes: []const u8) ?*Result {
     const r = gpa.create(Result) catch return null;
-    r.json = gpa.dupeZ(u8, bytes) catch {
+    r.json = gpa.dupeSentinel(u8, bytes, 0) catch {
         gpa.destroy(r);
         return null;
     };
@@ -176,7 +177,7 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
         fn makeContext(io: std.Io) !*App.Context {
             if (@hasDecl(app_mod, "createContext")) return app_mod.createContext(gpa, io);
             const Ctx = App.Context;
-            inline for (std.meta.fields(Ctx)) |f| if (f.default_value_ptr == null)
+            inline for (reflect.fields(Ctx)) |f| if (f.default_value_ptr == null)
                 @compileError("zastra C library: App's Ctx field `" ++ f.name ++ "` has no default. Export `pub fn createContext(gpa: std.mem.Allocator, io: std.Io) !*Ctx` from the app module.");
             const c = try gpa.create(Ctx);
             c.* = .{};
@@ -300,22 +301,22 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
 
         fn agentCancel(h: ?*AppHandle, agent_id: c_int, run_id: ?[*:0]const u8, err: ?*Error) callconv(.c) c_int {
             clearErr(err);
-            const a = h orelse return @intFromEnum(Status.err);
+            const a = h orelse return @backingInt(Status.err);
             inline for (App.agents, 0..) |A, i| if (i == agent_id) {
                 if (comptime !A.has_approvals) {
                     setErr(err, .invalid_input, "agent '{s}' has no approval-gated tools; its runs never suspend", .{A.id});
-                    return @intFromEnum(Status.invalid_input);
+                    return @backingInt(Status.invalid_input);
                 }
                 var arena: std.heap.ArenaAllocator = .init(gpa);
                 defer arena.deinit();
                 run.cancelRun(A, a.rt.state(), arena.allocator(), span(run_id) orelse "") catch |e| {
                     setErr(err, .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
-                    return @intFromEnum(Status.err);
+                    return @backingInt(Status.err);
                 };
-                return @intFromEnum(Status.ok);
+                return @backingInt(Status.ok);
             };
             setErr(err, .invalid_input, "no agent with id {d}", .{agent_id});
-            return @intFromEnum(Status.invalid_input);
+            return @backingInt(Status.invalid_input);
         }
 
         fn agentStream(h: ?*AppHandle, agent_id: c_int, input: ?[*:0]const u8, opts_json: ?[*:0]const u8, err: ?*Error) callconv(.c) ?*StreamObj {
@@ -395,14 +396,14 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
                     };
                     out.approval_id = null;
                     const bytes = encode.eventJson(sa, e) catch return .err;
-                    const z_bytes = sa.dupeZ(u8, bytes) catch return .err;
+                    const z_bytes = sa.dupeSentinel(u8, bytes, 0) catch return .err;
                     out.json = z_bytes.ptr;
                     out.len = bytes.len;
                     switch (e) {
                         inline else => |payload, tag| {
                             const kind = comptime encode.eventKind(@tagName(tag));
                             out.kind = kind;
-                            if (comptime kind == 4) out.approval_id = (sa.dupeZ(u8, payload.id) catch return .err).ptr;
+                            if (comptime kind == 4) out.approval_id = (sa.dupeSentinel(u8, payload.id, 0) catch return .err).ptr;
                             if (comptime kind == 6) so.done = true;
                         },
                     }
@@ -511,14 +512,14 @@ fn abiVersion() callconv(.c) u32 {
 }
 
 fn streamNext(s: ?*StreamObj, out: ?*Event) callconv(.c) c_int {
-    const so = s orelse return @intFromEnum(Status.err);
-    const o = out orelse return @intFromEnum(Status.err);
-    return @intFromEnum(so.vt.next(so, o));
+    const so = s orelse return @backingInt(Status.err);
+    const o = out orelse return @backingInt(Status.err);
+    return @backingInt(so.vt.next(so, o));
 }
 
 fn streamRespond(s: ?*StreamObj, approval_id: ?[*:0]const u8, decision_json: ?[*:0]const u8, err: ?*Error) callconv(.c) c_int {
     clearErr(err);
-    const so = s orelse return @intFromEnum(Status.err);
+    const so = s orelse return @backingInt(Status.err);
     const id = span(approval_id) orelse "";
     const text = span(decision_json) orelse "";
     const D = struct { approve: ?bool = null, deny: ?[]const u8 = null };
@@ -526,12 +527,12 @@ fn streamRespond(s: ?*StreamObj, approval_id: ?[*:0]const u8, decision_json: ?[*
     var fba: std.heap.FixedBufferAllocator = .init(&buf);
     const d = std.json.parseFromSliceLeaky(D, fba.allocator(), text, .{ .ignore_unknown_fields = true }) catch {
         setErr(err, .invalid_input, "decision_json must be {{\"approve\":true}} or {{\"deny\":\"reason\"}}", .{});
-        return @intFromEnum(Status.invalid_input);
+        return @backingInt(Status.invalid_input);
     };
     const decision: ev.Decision = if (d.deny) |r| .{ .deny = r } else if (d.approve orelse false) .approve else .{ .deny = "Denied." };
     const st = so.vt.respond(so, id, decision);
     if (st != .ok) setErr(err, st, "no pending approval '{s}'", .{id});
-    return @intFromEnum(st);
+    return @backingInt(st);
 }
 
 fn streamCancel(s: ?*StreamObj) callconv(.c) void {

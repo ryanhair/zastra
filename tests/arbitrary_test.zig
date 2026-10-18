@@ -121,8 +121,8 @@ test "every enum tag and union variant shows up; optionals are sometimes null" {
     var defaults: usize = 0;
     for (0..500) |_| {
         const v = try z.testing.arbitrary(T, arena.allocator(), prng.random());
-        tags[@intFromEnum(v.e)] = true;
-        variants[@intFromEnum(std.meta.activeTag(v.u))] = true;
+        tags[@backingInt(v.e)] = true;
+        variants[@backingInt(std.meta.activeTag(v.u))] = true;
         if (v.o == null) nulls += 1;
         if (v.d == 42) defaults += 1;
     }
@@ -316,9 +316,8 @@ test "round trip under the fuzzer" {
 }
 
 test "round trip from Smith byte inputs" {
-    // What the fuzzer feeds a Smith, without coverage feedback: `zig build
-    // test --fuzz` doesn't build on Zig 0.16.0 (its test runner fails to
-    // compile in fuzz mode), so this keeps the Smith path exercised.
+    // What the fuzzer feeds a Smith, without coverage feedback, so normal
+    // runs exercise the Smith path beyond the empty input.
     var prng: std.Random.DefaultPrng = .init(12);
     var bytes: [2048]u8 = undefined;
     for (0..200) |_| {

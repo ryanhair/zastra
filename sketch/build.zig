@@ -3,7 +3,7 @@
 //!   zig build                 → ./zig-out/bin/support      (your program)
 //!   zig build dev             → runs the zastra dev CLI against your App
 //!   zig build lib             → libsupport.{a,so,dylib} + support.h  (C ABI)
-//!   zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
+//!   zig build -Dtarget=aarch64-linux-musl -Doptimize=small
 //!                             → ~1–2 MB static binary for a Pi or a container
 //!                               `FROM scratch` (embed a CA bundle; see main.zig)
 
@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
     const dev = z.addDev(b, .{ .app = app_mod, .zastra = zastra_dep });
     const dev_step = b.step("dev", "Run the zastra dev CLI against this App");
     dev_step.dependOn(&dev.run.step);
-    if (b.args) |args| dev.run.addArgs(args);
+    dev.run.addPassthruArgs();
 
     // 3. C ABI: the same App exported as a library with a generated header.
     //    `z.addCLib` emits `export fn` wrappers and support.h from the App's

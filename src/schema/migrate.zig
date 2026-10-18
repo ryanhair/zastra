@@ -27,7 +27,7 @@ pub fn migrate(comptime Old: type, comptime f: anytype) type {
             .@"fn" => |i| i,
             else => errors.fail("z.migrate({s}, f): `f` must be a function `fn (std.mem.Allocator, {s}) !Next`, got {s}", .{ reflect.shortTypeName(Old), reflect.shortTypeName(Old), @typeName(F) }),
         };
-        if (info.params.len != 2 or info.params[0].type != Allocator or info.params[1].type != Old)
+        if (info.param_types.len != 2 or info.param_types[0] != Allocator or info.param_types[1] != Old)
             errors.fail("z.migrate({s}, f): `f` must take `(std.mem.Allocator, {s})`", .{ reflect.shortTypeName(Old), reflect.shortTypeName(Old) });
         const R = info.return_type.?;
         const Next = switch (@typeInfo(R)) {

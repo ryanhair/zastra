@@ -73,7 +73,7 @@ fn walk(a: std.mem.Allocator, v: *std.json.Value, ids: *std.StringHashMapUnmanag
                 if (std.mem.eql(u8, k, "traceId") or std.mem.eql(u8, k, "spanId") or std.mem.eql(u8, k, "parentSpanId")) {
                     const id = e.value_ptr.string;
                     const g = try ids.getOrPut(a, id);
-                    if (!g.found_existing) g.value_ptr.* = try std.fmt.allocPrint(a, "{s}{d}", .{ if (k[0] == 't') "trace-" else "span-", ids.count() });
+                    if (!g.found_existing) g.value_ptr.* = try a.print("{s}{d}", .{ if (k[0] == 't') "trace-" else "span-", ids.count() });
                     e.value_ptr.* = .{ .string = g.value_ptr.* };
                 } else if (std.mem.endsWith(u8, k, "TimeUnixNano")) {
                     e.value_ptr.* = .{ .string = "<time>" };
@@ -284,6 +284,6 @@ test "trace ids: 128-bit and the same in every span, the JSONL file and the save
     }
     // Before and after the resume.
     try t.expect(spans >= 5);
-    const needle = try std.fmt.allocPrint(a, "\"trace_id\":\"{s}\"", .{trace_id.?});
+    const needle = try a.print("\"trace_id\":\"{s}\"", .{trace_id.?});
     try t.expect(std.mem.indexOf(u8, rec.state_json, needle) != null);
 }

@@ -140,7 +140,7 @@ fn fmtNum(v: Value) std.json.Formatter(Value) {
 }
 
 fn issue(arena: Allocator, path: *std.ArrayList(u8), comptime fmt: []const u8, args: anytype) Allocator.Error!?Issue {
-    return .{ .path = try arena.dupe(u8, path.items), .message = try std.fmt.allocPrint(arena, fmt, args) };
+    return .{ .path = try arena.dupe(u8, path.items), .message = try arena.print(fmt, args) };
 }
 
 fn check(cx: *Ctx, schema: Value, v: Value, path: *std.ArrayList(u8)) Allocator.Error!?Issue {

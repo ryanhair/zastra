@@ -245,7 +245,7 @@ pub fn Manager(comptime kinds: Kinds) type {
             var cursor: ?[]const u8 = null;
             var ttl: ?i64 = null;
             while (true) {
-                const params = if (cursor) |c| try std.fmt.allocPrint(a, "\"cursor\":{f}", .{json.fmt(c)}) else "";
+                const params = if (cursor) |c| try a.print("\"cursor\":{f}", .{json.fmt(c)}) else "";
                 const reply = m.request(s, a, "tools/list", params, null, &.{}) catch |err| {
                     const d = serverDiag(s);
                     if (d.len > 0) m.st.diag.set(0, d);
@@ -417,7 +417,7 @@ pub fn Manager(comptime kinds: Kinds) type {
                     }
                     if (n > 0) try w.writeByte(',');
                     n += 1;
-                    const exposed = try std.fmt.allocPrint(m.gpa, "{s}__{s}", .{ s.name, t.safe_name });
+                    const exposed = try m.gpa.print("{s}__{s}", .{ s.name, t.safe_name });
                     defer m.gpa.free(exposed);
                     try Impl.writeToolDef(w, exposed, t.description, t.schema_json);
                 }
@@ -438,7 +438,7 @@ pub fn Manager(comptime kinds: Kinds) type {
         fn callImpl(ptr: *anyopaque, arena: Allocator, server_name: []const u8, safe_tool: []const u8, args_json: []const u8) anyerror!runtime.McpResult {
             const m: *M = @ptrCast(@alignCast(ptr));
             const found = m.findTool(server_name, safe_tool) orelse
-                return .{ .content = try std.fmt.allocPrint(arena, "MCP server '{s}' has no tool '{s}'.", .{ server_name, safe_tool }), .is_error = true };
+                return .{ .content = try arena.print("MCP server '{s}' has no tool '{s}'.", .{ server_name, safe_tool }), .is_error = true };
             const s = found.s;
             const t = found.t;
 
@@ -446,10 +446,10 @@ pub fn Manager(comptime kinds: Kinds) type {
             const args = std.json.parseFromSliceLeaky(std.json.Value, arena, args_text, .{}) catch
                 return .{ .content = "Invalid arguments: not valid JSON.", .is_error = true };
             if (t.validated) if (try validate.validate(arena, t.schema, args)) |issue|
-                return .{ .content = try std.fmt.allocPrint(arena, "Invalid arguments for {s}: {s}: {s}. Fix them and call the tool again.", .{ t.name, issue.path, issue.message }), .is_error = true };
+                return .{ .content = try arena.print("Invalid arguments for {s}: {s}: {s}. Fix them and call the tool again.", .{ t.name, issue.path, issue.message }), .is_error = true };
             const param_headers = if (kinds.http and isHttp(s)) try protocol.paramHeaderValues(arena, t.params, args) else &.{};
 
-            var params = try std.fmt.allocPrint(arena, "\"name\":{f},\"arguments\":{s}", .{ json.fmt(t.name), args_text });
+            var params = try arena.print("\"name\":{f},\"arguments\":{s}", .{ json.fmt(t.name), args_text });
             // An InputRequiredResult with only `requestState` may be retried
             // right away; one asking for input zastra can't give ends the call.
             var attempt: u32 = 0;
@@ -464,13 +464,13 @@ pub fn Manager(comptime kinds: Kinds) type {
                     .err => |e| {
                         // The tool's schema may have changed: re-list at the next run.
                         if (e.code == protocol.header_mismatch) markChanged(s);
-                        return .{ .content = try std.fmt.allocPrint(arena, "The MCP server returned an error: {s}", .{e.message}), .is_error = true };
+                        return .{ .content = try arena.print("The MCP server returned an error: {s}", .{e.message}), .is_error = true };
                     },
                 };
                 const rt = protocol.resultType(r);
                 if (std.mem.eql(u8, rt, "complete")) return render(arena, r);
                 if (!std.mem.eql(u8, rt, "input_required"))
-                    return .{ .content = try std.fmt.allocPrint(arena, "The MCP server returned an unrecognized result type '{s}'.", .{rt}), .is_error = true };
+                    return .{ .content = try arena.print("The MCP server returned an unrecognized result type '{s}'.", .{rt}), .is_error = true };
                 if (r.object.get("inputRequests")) |reqs| if (reqs == .object and reqs.object.count() > 0) {
                     var what: std.ArrayList(u8) = .empty;
                     var it = reqs.object.iterator();
@@ -479,7 +479,7 @@ pub fn Manager(comptime kinds: Kinds) type {
                         try what.appendSlice(arena, protocol.getStr(e.value_ptr.*, "method") orelse e.key_ptr.*);
                     }
                     std.log.warn("zastra: MCP server '{s}' tool '{s}' asked for input zastra can't provide: {s}", .{ s.name, t.name, what.items });
-                    return .{ .content = try std.fmt.allocPrint(arena, "The MCP server needs input zastra can't provide ({s}), so '{s}' couldn't run.", .{ what.items, t.name }), .is_error = true };
+                    return .{ .content = try arena.print("The MCP server needs input zastra can't provide ({s}), so '{s}' couldn't run.", .{ what.items, t.name }), .is_error = true };
                 };
                 const state = r.object.get("requestState") orelse
                     return .{ .content = "The MCP server asked for more input without saying what.", .is_error = true };
@@ -487,7 +487,7 @@ pub fn Manager(comptime kinds: Kinds) type {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.TooDeep => return .{ .content = "The MCP server's request state is nested too deeply.", .is_error = true },
                 };
-                params = try std.fmt.allocPrint(arena, "\"name\":{f},\"arguments\":{s},\"requestState\":{s}", .{ json.fmt(t.name), args_text, state_json });
+                params = try arena.print("\"name\":{f},\"arguments\":{s},\"requestState\":{s}", .{ json.fmt(t.name), args_text, state_json });
             }
             return .{ .content = "The MCP server kept asking for more input.", .is_error = true };
         }

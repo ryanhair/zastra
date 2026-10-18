@@ -435,7 +435,7 @@ pub fn Stream(comptime A: type) type {
             const calls = try s.arena.alloc(SavedCall, s.calls.items.len);
             for (s.calls.items, calls) |c, *o| o.* = .{ .id = c.id, .approval = @tagName(c.approval), .deny_reason = c.deny_reason };
             return .{
-                .prefix_hash = try std.fmt.allocPrint(s.arena, "{x:0>16}", .{A.prefix_hash}),
+                .prefix_hash = try s.arena.print("{x:0>16}", .{A.prefix_hash}),
                 .tools = &A.tool_prints,
                 .messages = s.messages.items,
                 .new_from = s.new_from,
@@ -448,8 +448,8 @@ pub fn Stream(comptime A: type) type {
                 .repair_used = s.repair_used,
                 .working_json = if (A.has_working_memory) try json.stringifyAlloc(s.arena, s.working) else null,
                 .working_dirty = s.working_dirty,
-                .core_hash = try std.fmt.allocPrint(s.arena, "{x:0>16}", .{A.run_core_fingerprint}),
-                .working_fingerprint = if (A.has_working_memory) try std.fmt.allocPrint(s.arena, "{x:0>16}", .{A.working_fingerprint}) else null,
+                .core_hash = try s.arena.print("{x:0>16}", .{A.run_core_fingerprint}),
+                .working_fingerprint = if (A.has_working_memory) try s.arena.print("{x:0>16}", .{A.working_fingerprint}) else null,
                 .thread = s.opts.thread,
                 .resource = s.opts.resource,
                 .trace_id = try s.arena.dupe(u8, &s.trace_id),
@@ -535,7 +535,7 @@ pub fn Stream(comptime A: type) type {
         }
 
         fn workingSuffix(s: *Self) Allocator.Error![]const u8 {
-            return std.fmt.allocPrint(s.arena, "Working memory (what you know about this user; update it with `{s}`):\n{f}", .{ agent_mod.working_memory_tool, json.fmt(s.working) });
+            return s.arena.print("Working memory (what you know about this user; update it with `{s}`):\n{f}", .{ agent_mod.working_memory_tool, json.fmt(s.working) });
         }
 
         /// Queue `approval_request` events for the calls still pending (a
@@ -860,7 +860,7 @@ pub fn Stream(comptime A: type) type {
                             s.output = o;
                         } else |err| switch (err) {
                             error.OutOfMemory => return error.OutOfMemory,
-                            error.ValidationFailed => return s.repair(try std.fmt.allocPrint(s.arena,
+                            error.ValidationFailed => return s.repair(try s.arena.print(
                                 "Your response didn't match the required JSON schema: {s}: {s}. Respond again with only the corrected JSON object.", .{ issue.path, issue.message }), issue),
                         }
                     } else {
@@ -934,7 +934,7 @@ pub fn Stream(comptime A: type) type {
                     c.parsed = @unionInit(A.ToolCall, TI.name, in);
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.ValidationFailed => c.parse_error = try std.fmt.allocPrint(s.arena, "Invalid arguments for {s}: {s}: {s}. Fix them and call the tool again.", .{ TI.name, issue.path, issue.message }),
+                    error.ValidationFailed => c.parse_error = try s.arena.print("Invalid arguments for {s}: {s}: {s}. Fix them and call the tool again.", .{ TI.name, issue.path, issue.message }),
                 }
             };
             if (A.has_output_type and !A.native_structured_output and std.mem.eql(u8, tu.name, agent_mod.final_answer_tool)) {
@@ -943,7 +943,7 @@ pub fn Stream(comptime A: type) type {
                     c.output = o;
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.ValidationFailed => c.parse_error = try std.fmt.allocPrint(s.arena, "The final answer didn't match the schema: {s}: {s}. Call {s} again with a corrected answer.", .{ issue.path, issue.message, agent_mod.final_answer_tool }),
+                    error.ValidationFailed => c.parse_error = try s.arena.print("The final answer didn't match the schema: {s}: {s}. Call {s} again with a corrected answer.", .{ issue.path, issue.message, agent_mod.final_answer_tool }),
                 }
             }
             if (A.has_working_memory and std.mem.eql(u8, tu.name, agent_mod.working_memory_tool)) {
@@ -952,7 +952,7 @@ pub fn Stream(comptime A: type) type {
                     c.working = w;
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.ValidationFailed => c.parse_error = try std.fmt.allocPrint(s.arena, "Invalid working-memory update: {s}: {s}", .{ issue.path, issue.message }),
+                    error.ValidationFailed => c.parse_error = try s.arena.print("Invalid working-memory update: {s}: {s}", .{ issue.path, issue.message }),
                 }
             }
             if (c.kind == .unknown and A.mcp_tools.len > 0) {
@@ -965,7 +965,7 @@ pub fn Stream(comptime A: type) type {
                         c.parsed = @unionInit(A.ToolCall, "mcp", .{ .server = c.mcp_server, .tool = c.mcp_tool, .args_json = tu.input_json });
                 }
             }
-            if (c.kind == .unknown) c.parse_error = try std.fmt.allocPrint(s.arena, "There is no tool named '{s}'.", .{tu.name});
+            if (c.kind == .unknown) c.parse_error = try s.arena.print("There is no tool named '{s}'.", .{tu.name});
             try s.calls.append(s.arena, c);
         }
 
@@ -985,7 +985,7 @@ pub fn Stream(comptime A: type) type {
                     continue;
                 }
                 if (c.approval == .denied) {
-                    c.content = try std.fmt.allocPrint(s.arena, "The user denied this tool call: {s}", .{c.deny_reason});
+                    c.content = try s.arena.print("The user denied this tool call: {s}", .{c.deny_reason});
                     c.is_error = true;
                     continue;
                 }
@@ -1099,8 +1099,8 @@ pub fn Stream(comptime A: type) type {
         }
 
         fn modelErrorMessage(comptime TI: type, err: anyerror) ?[]const u8 {
-            const set = @typeInfo(TI.ModelErrors).error_set orelse return null;
-            inline for (set) |e| if (std.mem.eql(u8, @errorName(err), e.name)) return @field(TI.Tool.error_messages, e.name);
+            const set = @typeInfo(TI.ModelErrors).error_set.error_names orelse return null;
+            inline for (set) |name| if (std.mem.eql(u8, @errorName(err), name)) return @field(TI.Tool.error_messages, name);
             return null;
         }
 

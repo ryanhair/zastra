@@ -5,7 +5,7 @@
 //!   zig build lib             → libsupport + support.h (C ABI)
 //!   zig build embed           → builds and runs embed.c against libsupport
 //!   zig build test            → harness tests (scripted models, no network)
-//!   zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
+//!   zig build -Dtarget=aarch64-linux-musl -Doptimize=small
 //!                             → a small static binary
 
 const std = @import("std");
@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
     // 2. Dev CLI.
     const dev = z.addDev(b, .{ .app = app_mod, .zastra = zastra_dep });
     dev.run.step.dependOn(&install_docs.step);
-    if (b.args) |args| dev.run.addArgs(args);
+    dev.run.addPassthruArgs();
     b.step("dev", "Run the zastra dev CLI against this App").dependOn(&dev.run.step);
 
     // 3. C ABI.

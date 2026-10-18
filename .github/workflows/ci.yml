@@ -14,11 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
-      # Zig 0.16 fails to fetch .zip dependencies ("failed to create temporary
-      # zip file") when the global cache has no tmp/ directory yet.
-      - name: prepare the zig cache
-        run: mkdir -p "${ZIG_GLOBAL_CACHE_DIR:-$HOME/.cache/zig}/tmp"
+          version: 0.17.0
       - name: unit, integration, golden and compile-fail tests
         run: zig build test --summary all
       - name: example harness tests
@@ -32,6 +28,11 @@ jobs:
         run: zig build embed
       - name: dev serve, driven by curl (fake keys exercise the error paths)
         run: bash tests/dev_serve_smoke.sh
+      # Coverage-guided fuzzing of the parser, the round-trip property and
+      # fuzzTool. A short run checks the fuzz build and catches regressions;
+      # longer runs are local (`zig build test --fuzz`).
+      - name: fuzz (10K runs per test)
+        run: zig build test --fuzz=10K
 
   cross-compile:
     runs-on: ubuntu-latest
@@ -42,14 +43,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
-      # Zig 0.16 fails to fetch .zip dependencies ("failed to create temporary
-      # zip file") when the global cache has no tmp/ directory yet.
-      - name: prepare the zig cache
-        run: mkdir -p "${ZIG_GLOBAL_CACHE_DIR:-$HOME/.cache/zig}/tmp"
+          version: 0.17.0
       - name: build the example
         working-directory: examples/support
-        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSmall
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=small
 
   size-and-compile-time:
     runs-on: ubuntu-latest
@@ -57,26 +54,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
-      # Zig 0.16 fails to fetch .zip dependencies ("failed to create temporary
-      # zip file") when the global cache has no tmp/ directory yet.
-      - name: prepare the zig cache
-        run: mkdir -p "${ZIG_GLOBAL_CACHE_DIR:-$HOME/.cache/zig}/tmp"
+          version: 0.17.0
       - name: size budgets (PLAN.md §5.6)
         run: zig build size
       # Runner speed varies, so the baseline (v1.0.0) is built on the same
-      # runner, each build with fresh caches. Fails above 1.5x (PLAN.md §12).
+      # runner, each build with fresh caches. v1.0.0 needs Zig 0.16.0; the
+      # head uses the current Zig, so this compares what users see. Fails
+      # above 1.5x (PLAN.md §12, D55).
       - name: compile time of the example vs v1.0.0
         run: |
           git fetch -q --depth=1 origin tag v1.0.0
           git worktree add -q /tmp/base v1.0.0
+          curl -sSfL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz | tar -xJ -C /tmp
+          # measure <checkout> <cache dir> <zig> <optimize>
           measure() {
+            # Zig 0.16 fails to fetch .zip dependencies without a tmp/ directory.
             mkdir -p "$2/tmp"
             ( cd "$1/examples/support" && start=$(date +%s) &&
-              zig build -Doptimize=ReleaseSmall --cache-dir "$2/local" --global-cache-dir "$2" >&2 &&
+              ZIG_GLOBAL_CACHE_DIR="$2" ZIG_LOCAL_CACHE_DIR="$2/local" "$3" build -Doptimize="$4" >&2 &&
               echo $(( $(date +%s) - start )) )
           }
-          base=$(measure /tmp/base /tmp/cache-base)
-          head=$(measure "$PWD" /tmp/cache-head)
+          base=$(measure /tmp/base /tmp/cache-base /tmp/zig-x86_64-linux-0.16.0/zig ReleaseSmall)
+          head=$(measure "$PWD" /tmp/cache-head zig small)
           echo "compile time: ${head}s, v1.0.0 on this runner: ${base}s"
           test $(( head * 2 )) -le $(( base * 3 ))

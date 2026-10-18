@@ -237,7 +237,7 @@ pub const path = "/responses";
 pub fn auth(arena: Allocator, api_key: ?[]const u8) Allocator.Error![]const std.http.Header {
     const k = api_key orelse return &.{};
     const hs = try arena.alloc(std.http.Header, 1);
-    hs[0] = .{ .name = "authorization", .value = try std.fmt.allocPrint(arena, "Bearer {s}", .{k}) };
+    hs[0] = .{ .name = "authorization", .value = try arena.print("Bearer {s}", .{k}) };
     return hs;
 }
 

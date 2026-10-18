@@ -202,9 +202,9 @@ pub fn custom(comptime opts: anytype) Spec {
             reflect.checkConfigFields(@TypeOf(opts.supports), reflect.fieldNames(Supports), "z.custom(...).supports");
             if (@hasField(@TypeOf(opts.supports), "reasoning_modes"))
                 reflect.checkConfigFields(@TypeOf(opts.supports.reasoning_modes), reflect.fieldNames(ReasoningModes), "z.custom(...).supports.reasoning_modes");
-            for (std.meta.fields(@TypeOf(opts.supports))) |f| {
+            for (reflect.fields(@TypeOf(opts.supports))) |f| {
                 if (std.mem.eql(u8, f.name, "reasoning_modes")) {
-                    for (std.meta.fields(f.type)) |rf| @field(supports.reasoning_modes, rf.name) = @field(opts.supports.reasoning_modes, rf.name);
+                    for (reflect.fields(f.type)) |rf| @field(supports.reasoning_modes, rf.name) = @field(opts.supports.reasoning_modes, rf.name);
                 } else @field(supports, f.name) = @field(opts.supports, f.name);
             }
         }

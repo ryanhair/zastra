@@ -34,13 +34,13 @@ const meta_json = "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"" ++
 pub fn requestJson(arena: Allocator, era: Era, id: i64, method: []const u8, params: []const u8) Allocator.Error![]u8 {
     const sep = if (params.len > 0) "," else "";
     return switch (era) {
-        .modern => std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"{s}\",\"params\":{{{s}{s}{s}}}}}", .{ id, method, params, sep, meta_json }),
-        .legacy => std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"{s}\",\"params\":{{{s}}}}}", .{ id, method, params }),
+        .modern => arena.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"{s}\",\"params\":{{{s}{s}{s}}}}}", .{ id, method, params, sep, meta_json }),
+        .legacy => arena.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":\"{s}\",\"params\":{{{s}}}}}", .{ id, method, params }),
     };
 }
 
 pub fn notificationJson(arena: Allocator, method: []const u8, params: []const u8) Allocator.Error![]u8 {
-    return std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"method\":\"{s}\",\"params\":{{{s}}}}}", .{ method, params });
+    return arena.print("{{\"jsonrpc\":\"2.0\",\"method\":\"{s}\",\"params\":{{{s}}}}}", .{ method, params });
 }
 
 pub fn initializeParams(comptime version: []const u8) []const u8 {
@@ -186,7 +186,7 @@ pub fn paramHeaders(arena: Allocator, schema: Value) Allocator.Error!union(enum)
     var path: std.ArrayList([]const u8) = .empty;
     if (try collect(arena, schema, &path, &out, true)) |why| return .{ .invalid = why };
     for (out.items, 0..) |a, i| for (out.items[0..i]) |b| if (std.ascii.eqlIgnoreCase(a.name, b.name))
-        return .{ .invalid = try std.fmt.allocPrint(arena, "x-mcp-header \"{s}\" is used twice", .{a.name}) };
+        return .{ .invalid = try arena.print("x-mcp-header \"{s}\" is used twice", .{a.name}) };
     return .{ .ok = out.items };
 }
 
@@ -198,7 +198,7 @@ fn collect(arena: Allocator, schema: Value, path: *std.ArrayList([]const u8), ou
         if (h != .string or h.string.len == 0 or !isToken(h.string)) return "x-mcp-header must be a non-empty HTTP header token";
         const ty = getStr(schema, "type") orelse "";
         if (!std.mem.eql(u8, ty, "string") and !std.mem.eql(u8, ty, "integer") and !std.mem.eql(u8, ty, "boolean"))
-            return try std.fmt.allocPrint(arena, "x-mcp-header \"{s}\" is on a parameter of type '{s}'; only string, integer and boolean are allowed", .{ h.string, ty });
+            return try arena.print("x-mcp-header \"{s}\" is on a parameter of type '{s}'; only string, integer and boolean are allowed", .{ h.string, ty });
         try out.append(arena, .{ .name = h.string, .path = try arena.dupe([]const u8, path.items) });
     }
     var it = o.iterator();
@@ -246,12 +246,12 @@ pub fn paramHeaderValues(arena: Allocator, headers: []const ParamHeader, args: V
         } else {
             const text: ?[]const u8 = switch (v) {
                 .string => |s| s,
-                .integer => |i| try std.fmt.allocPrint(arena, "{d}", .{i}),
+                .integer => |i| try arena.print("{d}", .{i}),
                 .bool => |b| if (b) "true" else "false",
                 else => null,
             };
             if (text) |t| try out.append(arena, .{
-                .name = try std.fmt.allocPrint(arena, "Mcp-Param-{s}", .{h.name}),
+                .name = try arena.print("Mcp-Param-{s}", .{h.name}),
                 .value = try headerValue(arena, t),
             });
         }

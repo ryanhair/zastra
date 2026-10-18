@@ -62,7 +62,7 @@ fn handle(a: std.mem.Allocator, req: *std.http.Server.Request) !void {
     const meta = if (params == .object) params.object.get("_meta") else null;
     const version = if (meta) |m| (if (m.object.get("io.modelcontextprotocol/protocolVersion")) |pv| pv.string else "") else "";
     if (!std.mem.eql(u8, version, "2026-07-28"))
-        return req.respond(try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32022,\"message\":\"Unsupported protocol version\",\"data\":{{\"supported\":[\"2026-07-28\"],\"requested\":\"{s}\"}}}}}}", .{ id.integer, version }), .{ .status = .bad_request, .extra_headers = json_type });
+        return req.respond(try a.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32022,\"message\":\"Unsupported protocol version\",\"data\":{{\"supported\":[\"2026-07-28\"],\"requested\":\"{s}\"}}}}}}", .{ id.integer, version }), .{ .status = .bad_request, .extra_headers = json_type });
 
     const result: []const u8 = if (std.mem.eql(u8, method, "server/discover"))
         "{\"resultType\":\"complete\",\"supportedVersions\":[\"2026-07-28\"],\"capabilities\":{\"tools\":{}},\"_meta\":{\"io.modelcontextprotocol/serverInfo\":{\"name\":\"acme-status\",\"version\":\"1.0\"}}}"
@@ -74,7 +74,7 @@ fn handle(a: std.mem.Allocator, req: *std.http.Server.Request) !void {
         inline for (statuses) |s| if (std.mem.eql(u8, s[0], service)) {
             status = s[1];
         };
-        break :blk try std.fmt.allocPrint(a, "{{\"resultType\":\"complete\",\"content\":[{{\"type\":\"text\",\"text\":\"{s}: {s}\"}}]}}", .{ service, status });
-    } else return req.respond(try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32601,\"message\":\"Method not found\"}}}}", .{id.integer}), .{ .status = .not_found, .extra_headers = json_type });
-    try req.respond(try std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"result\":{s}}}", .{ id.integer, result }), .{ .extra_headers = json_type });
+        break :blk try a.print("{{\"resultType\":\"complete\",\"content\":[{{\"type\":\"text\",\"text\":\"{s}: {s}\"}}]}}", .{ service, status });
+    } else return req.respond(try a.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"error\":{{\"code\":-32601,\"message\":\"Method not found\"}}}}", .{id.integer}), .{ .status = .not_found, .extra_headers = json_type });
+    try req.respond(try a.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"result\":{s}}}", .{ id.integer, result }), .{ .extra_headers = json_type });
 }

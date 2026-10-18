@@ -349,7 +349,7 @@ Trace ids are 128-bit (32 hex characters), as in OTLP and W3C `traceparent`. Pas
 
 ```zig
 const dev = z.addDev(b, .{ .app = app_mod, .zastra = zastra_dep });
-if (b.args) |args| dev.run.addArgs(args);
+dev.run.addPassthruArgs();
 b.step("dev", "zastra dev CLI").dependOn(&dev.run.step);
 
 const lib = z.addCLib(b, .{ .name = "support", .app = app_mod, .zastra = zastra_dep });

@@ -1,6 +1,7 @@
 //! Comptime Mermaid flowchart for a workflow (PLAN.md §5.7).
 
 const std = @import("std");
+const reflect = @import("../meta/reflect.zig");
 const step = @import("step.zig");
 
 pub fn render(comptime W: type) []const u8 {
@@ -87,7 +88,7 @@ fn one(comptime T: type, comptime prefix: []const u8, comptime from: []const []c
             var text: []const u8 = "    " ++ fork ++ "[/" ++ step.idOf(T) ++ "/]\n" ++ edges(from, fork, label);
             const join = id ++ "_join";
             text = text ++ "    " ++ join ++ "[\\join\\]\n";
-            for (std.meta.fields(@TypeOf(T.steps))) |f| {
+            for (reflect.fields(@TypeOf(T.steps))) |f| {
                 const cid = id ++ "_" ++ f.name;
                 text = text ++ "    " ++ cid ++ "[" ++ step.idOf(@field(T.steps, f.name)) ++ "]\n" ++
                     "    " ++ fork ++ " --> " ++ cid ++ "\n    " ++ cid ++ " --> " ++ join ++ "\n";

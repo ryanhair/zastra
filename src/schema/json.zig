@@ -6,6 +6,7 @@
 //! - `Json` values are written verbatim
 
 const std = @import("std");
+const reflect = @import("../meta/reflect.zig");
 const Writer = std.Io.Writer;
 
 /// Untyped JSON: the escape hatch in schemas. `raw` is a complete JSON value.
@@ -89,7 +90,7 @@ pub fn write(value: anytype, w: *Writer) Writer.Error!void {
 }
 
 fn writeFields(value: anytype, w: *Writer, first: *bool) Writer.Error!void {
-    inline for (std.meta.fields(@TypeOf(value))) |f| {
+    inline for (reflect.fields(@TypeOf(value))) |f| {
         const v = @field(value, f.name);
         const skip = @typeInfo(f.type) == .optional and v == null;
         if (!skip) {

@@ -227,7 +227,7 @@ pub const Stdio = struct {
                     // Legacy servers may ask for sampling, roots or
                     // elicitation; zastra declared none of them.
                     const id_json = json.stringifyValueAlloc(a, r.id) catch continue;
-                    const reply = std.fmt.allocPrint(a, "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{{\"code\":-32601,\"message\":\"zastra doesn't support {s}\"}}}}", .{ id_json, r.method }) catch continue;
+                    const reply = a.print("{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{{\"code\":-32601,\"message\":\"zastra doesn't support {s}\"}}}}", .{ id_json, r.method }) catch continue;
                     c.send(reply) catch {};
                 },
                 .other => {},
