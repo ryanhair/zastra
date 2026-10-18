@@ -1,12 +1,15 @@
 # Changelog
 
-## Unreleased
+## v1.4.0 (2026-10-18)
 
 ### Breaking changes
 - **Zig 0.17.x is required** (was 0.16.x). The API is unchanged. Apps need the usual 0.17 build-script changes, e.g. `run.addPassthruArgs()` instead of `if (b.args) |args| run.addArgs(args)` (D55).
 
 ### Added
 - Coverage-guided fuzzing works: `zig build fuzz --fuzz` runs the parser, the round-trip property and `z.testing.fuzzTool` (with `.smith`) under the fuzzer. CI runs 10K iterations per fuzz test.
+
+### Changed
+- The Zig version for working on zastra is pinned in `mise.toml` (`mise install`); CI reads it too.
 
 ### Fixed
 - OTLP export: a full batch could go out followed by a partial one with the spans that arrived while it was sent. Partial batches now wait for `interval_ms` or shutdown.
