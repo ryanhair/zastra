@@ -12,9 +12,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      # Zig comes from mise.toml. The cache keeps Zig's global cache (the
+      # build runner, fetched packages) between runs.
+      - uses: jdx/mise-action@v5
+      - uses: actions/cache@v4
         with:
-          version: 0.17.0
+          path: |
+            ~/.cache/zig
+            ~/Library/Caches/zig
+          key: zig-${{ github.job }}-${{ runner.os }}-${{ hashFiles('mise.toml', '**/build.zig.zon') }}
       - name: unit, integration, golden and compile-fail tests
         run: zig build test --summary all
       - name: example harness tests
@@ -41,9 +47,15 @@ jobs:
         target: [x86_64-linux-musl, aarch64-linux-musl, aarch64-macos, x86_64-windows]
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      # Zig comes from mise.toml. The cache keeps Zig's global cache (the
+      # build runner, fetched packages) between runs.
+      - uses: jdx/mise-action@v5
+      - uses: actions/cache@v4
         with:
-          version: 0.17.0
+          path: |
+            ~/.cache/zig
+            ~/Library/Caches/zig
+          key: zig-${{ github.job }}-${{ matrix.target }}-${{ hashFiles('mise.toml', '**/build.zig.zon') }}
       - name: build the example
         working-directory: examples/support
         run: zig build -Dtarget=${{ matrix.target }} -Doptimize=small
@@ -52,9 +64,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      # Zig comes from mise.toml. The cache keeps Zig's global cache (the
+      # build runner, fetched packages) between runs.
+      - uses: jdx/mise-action@v5
+      - uses: actions/cache@v4
         with:
-          version: 0.17.0
+          path: |
+            ~/.cache/zig
+            ~/Library/Caches/zig
+          key: zig-${{ github.job }}-${{ runner.os }}-${{ hashFiles('mise.toml', '**/build.zig.zon') }}
       - name: size budgets (PLAN.md §5.6)
         run: zig build size
       # Runner speed varies, so the baseline (v1.0.0) is built on the same
@@ -67,7 +85,7 @@ jobs:
         run: |
           git fetch -q --depth=1 origin tag v1.0.0
           git worktree add -q /tmp/base v1.0.0
-          curl -sSfL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz | tar -xJ -C /tmp
+          mise install -q zig@0.16.0
           # measure <checkout> <cache dir> <zig> <optimize>
           measure() {
             # Zig 0.16 fails to fetch .zip dependencies without a tmp/ directory.
@@ -79,7 +97,7 @@ jobs:
               "$3" build -Doptimize="$4" >&2 &&
               echo $(( $(date +%s) - start )) )
           }
-          base=$(measure /tmp/base /tmp/cache-base /tmp/zig-x86_64-linux-0.16.0/zig ReleaseSmall)
+          base=$(measure /tmp/base /tmp/cache-base "$(mise where zig@0.16.0)/zig" ReleaseSmall)
           head=$(measure "$PWD" /tmp/cache-head zig small)
           echo "compile time: ${head}s, v1.0.0 on this runner: ${base}s"
           test $(( head * 2 )) -le $(( base * 3 ))

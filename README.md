@@ -39,7 +39,7 @@ while (try stream.next()) |event| switch (event) {
 
 ## Requirements
 
-Zig **0.17.x**. zastra uses the `std.Io` model throughout (`std.process.Init`, `io.async`, `Future.cancel`).
+Zig **0.17.x**. zastra uses the `std.Io` model throughout (`std.process.Init`, `io.async`, `Future.cancel`). To work on zastra itself, `mise install` fetches the pinned version from `mise.toml`.
 
 ## Getting started
 

@@ -20,6 +20,7 @@ A Mastra-style agent framework for Zig (agents, tools, workflows, memory, MCP, t
 - Public API changes: update `sketch/` and the relevant PLAN.md section in the same change.
 
 ## Commands
+- The toolchain is pinned in `mise.toml` (`mise install`); CI reads it too.
 - `zig build test`: unit, integration, golden and compile-fail tests
 - `zig build golden -- --update`: refresh golden files
 - `zig build fuzz --fuzz[=N]`: coverage-guided fuzzing (LLVM-built tests; `zig build test` runs each fuzz test once)
