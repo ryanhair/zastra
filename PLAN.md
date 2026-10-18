@@ -2063,7 +2063,7 @@ Zig 0.17.0 was released 2026-10-01. Its test runner fixes the fuzz-mode compile 
 - `zig build fuzz --fuzz` runs all three fuzz tests and finds a planted bug.
 - Size budgets pass; compile time within 25% of v1.0.0 on the same CI runner; CI green on all four cross-compile targets.
 
-**Done (2026-10-18):**
+**Done (2026-10-18):** CI green on every job (34cd0b9), including `zig build fuzz --fuzz=10K` on Ubuntu and macOS. Compile time 35 s against v1.0.0's 32 s on the same runner (+9%).
 - 166/166 tests; support example 7/7; `embed` and the smoke script pass; cross-compiles for x86_64-linux-musl, aarch64-linux-musl, aarch64-macos and x86_64-windows build locally.
 - `--fuzz=20000` locally: the parser fuzz test reached 50K runs and the round-trip test 26K, no failures; a planted bug in the fuzzTool test was found.
 - Size: anthropic-only + memory 661,352 B (−1,224 B against 0.16), both_sqlite 1,520,928 B, full 1,601,928 B.
