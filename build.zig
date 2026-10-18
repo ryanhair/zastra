@@ -78,6 +78,14 @@ pub fn build(b: *std.Build) void {
     }) });
     test_step.dependOn(&b.addRunArtifact(integration).step);
 
+    // `zig build fuzz --fuzz`: the unit and integration tests again, built
+    // with LLVM. The fuzzer needs LLVM's coverage instrumentation, and debug
+    // builds for x86_64 Linux use the self-hosted backend, which has none.
+    // Without `--fuzz`, each fuzz test runs its empty input once.
+    const fuzz_step = b.step("fuzz", "Unit and integration tests built for the fuzzer (use with --fuzz)");
+    fuzz_step.dependOn(&b.addRunArtifact(b.addTest(.{ .name = "unit-fuzz", .root_module = mod, .use_llvm = true })).step);
+    fuzz_step.dependOn(&b.addRunArtifact(b.addTest(.{ .name = "integration-fuzz", .root_module = integration.root_module, .use_llvm = true })).step);
+
     // The support example's App, for golden prefixes, Mermaid, manifest and header.
     const notify = b.createModule(.{ .root_source_file = b.path("examples/support/pkgs/notify/notify.zig") });
     const support_app = b.createModule(.{

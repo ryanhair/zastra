@@ -30,9 +30,9 @@ jobs:
         run: bash tests/dev_serve_smoke.sh
       # Coverage-guided fuzzing of the parser, the round-trip property and
       # fuzzTool. A short run checks the fuzz build and catches regressions;
-      # longer runs are local (`zig build test --fuzz`).
+      # longer runs are local (`zig build fuzz --fuzz`).
       - name: fuzz (10K runs per test)
-        run: zig build test --fuzz=10K
+        run: zig build fuzz --fuzz=10K
 
   cross-compile:
     runs-on: ubuntu-latest

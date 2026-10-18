@@ -111,7 +111,7 @@ test "a well-behaved tool survives valid and hostile arguments" {
 }
 
 test "a well-behaved tool under the fuzzer" {
-    // `zig build test --fuzz` drives this with coverage feedback; a normal
+    // `zig build fuzz --fuzz` drives this with coverage feedback; a normal
     // run tries the empty input once.
     try std.testing.fuzz({}, struct {
         fn one(_: void, smith: *std.testing.Smith) anyerror!void {

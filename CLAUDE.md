@@ -22,6 +22,7 @@ A Mastra-style agent framework for Zig (agents, tools, workflows, memory, MCP, t
 ## Commands
 - `zig build test`: unit, integration, golden and compile-fail tests
 - `zig build golden -- --update`: refresh golden files
+- `zig build fuzz --fuzz[=N]`: coverage-guided fuzzing (LLVM-built tests; `zig build test` runs each fuzz test once)
 - `zig build compile-fail`: compile-fail tests only (`tests/compile_fail/*.zig`, `//! expect:` lines)
 - `zig build size`: binary-size budgets; `zig build models-update`: regenerate the catalog; `zig build docs`
 - In `examples/support`: `zig build test`, `zig build dev -- <cmd>`, `zig build lib`, `zig build embed`

@@ -2,7 +2,7 @@
 //! that `schema.parse(T, ...)` accepts (PLAN.md §19.3, D51).
 //!
 //! The source is a seeded `std.Random` (deterministic, for normal tests) or a
-//! `*std.testing.Smith` (coverage-guided, under `zig build test --fuzz`).
+//! `*std.testing.Smith` (coverage-guided, under `zig build fuzz --fuzz`).
 //! About a quarter of picks are boundaries: `min`, `max`, 0, empty and
 //! maximum-length strings and arrays, and characters that need escaping.
 //! `pattern` isn't generated (D27); a type can take over its own generation
