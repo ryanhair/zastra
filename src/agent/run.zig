@@ -20,6 +20,7 @@ const ToolCtx = @import("../context.zig").ToolCtx;
 const agent_mod = @import("agent.zig");
 const ev = @import("events.zig");
 const storage = @import("../storage/storage.zig");
+const runs = @import("../runs.zig");
 const Allocator = std.mem.Allocator;
 const Message = msg.Message;
 
@@ -33,7 +34,7 @@ pub const Error = provider.Error || error{
     /// `resumeRun`/`cancelRun`: no saved run with that id.
     RunNotFound,
     /// The saved run belongs to another agent or to a workflow.
-    WrongAgent,
+    WrongOwner,
     /// The saved run isn't suspended (it finished, failed or was canceled).
     NotSuspended,
     /// Another resume claimed the run first (PLAN.md D32).
@@ -48,8 +49,11 @@ pub const Error = provider.Error || error{
     OutputInvalid,
     /// The provider's API key isn't in the environment.
     MissingApiKey,
-    /// Stored history or working memory couldn't be read.
+    /// Stored history, working memory or the saved run couldn't be read
+    /// or written.
     StorageFailed,
+    /// `resumeRun`/`cancelRun` on an App without storage.
+    NoStorage,
     /// A working-memory migration (`z.migrate`) returned an error (§18.2).
     MigrationFailed,
     /// An MCP call failed at the transport level.
@@ -388,23 +392,18 @@ pub fn Stream(comptime A: type) type {
                 s.st.setDiag(&s.diag);
                 return error.NotSuspended;
             }
-            const store = s.st.storage orelse return error.StorageFailed;
             const snap = try s.snapshot();
-            store.saveRun(.{
+            try runs.save(s.st, .{
                 .run_id = s.run_id,
                 .kind = .agent,
                 .owner_id = A.id,
                 .fingerprint = A.run_fingerprint,
-                .status = "suspended",
+                .status = .suspended,
                 .suspended_at = "approval",
                 .state_json = try json.stringifyAlloc(s.arena, snap),
                 .created_at = s.created_at,
                 .updated_at = s.st.nowMs(),
-            }) catch |err| {
-                s.diag.print(0, "agent '{s}' run '{s}': saving the suspended run: {t}", .{ A.id, s.run_id, err });
-                s.st.setDiag(&s.diag);
-                return error.StorageFailed;
-            };
+            });
             s.persisted = true;
             var reqs: std.ArrayList(ev.ApprovalRequest(A.ApprovalCall)) = .empty;
             for (s.calls.items) |c| if (c.approval == .pending) {
@@ -667,16 +666,16 @@ pub fn Stream(comptime A: type) type {
                 s.run_span.fail(s.diag.message());
                 s.run_span.end();
                 s.phase = .done;
-                s.saveStatus("failed");
+                s.saveStatus(.failed);
             }
         }
 
         /// For runs that were saved while suspended: record how they ended.
-        fn saveStatus(s: *Self, status: []const u8) void {
+        fn saveStatus(s: *Self, status: runs.Status) void {
             if (!s.persisted) return;
             const store = s.st.storage orelse return;
             var state_json: []const u8 = "{}";
-            if (s.opts.keep_result and std.mem.eql(u8, status, "completed")) {
+            if (s.opts.keep_result and status == .completed) {
                 if (A.has_output_type) {
                     if (s.output) |o| state_json = json.stringifyAlloc(s.arena, StoredResult(A){ .text = s.last_text, .output = o, .steps = s.step, .usage = s.usage, .finish_reason = s.finish_reason }) catch "{}";
                 } else {
@@ -693,7 +692,7 @@ pub fn Stream(comptime A: type) type {
                 .state_json = state_json,
                 .created_at = s.created_at,
                 .updated_at = s.st.nowMs(),
-            }) catch |err| std.log.warn("zastra: agent '{s}' run '{s}': recording status '{s}': {t}", .{ A.id, s.run_id, status, err });
+            }) catch |err| std.log.warn("zastra: agent '{s}' run '{s}': recording status '{t}': {t}", .{ A.id, s.run_id, status, err });
         }
 
         fn push(s: *Self, e: A.Event) Allocator.Error!void {
@@ -860,8 +859,7 @@ pub fn Stream(comptime A: type) type {
                             s.output = o;
                         } else |err| switch (err) {
                             error.OutOfMemory => return error.OutOfMemory,
-                            error.ValidationFailed => return s.repair(try s.arena.print(
-                                "Your response didn't match the required JSON schema: {s}: {s}. Respond again with only the corrected JSON object.", .{ issue.path, issue.message }), issue),
+                            error.ValidationFailed => return s.repair(try s.arena.print("Your response didn't match the required JSON schema: {s}: {s}. Respond again with only the corrected JSON object.", .{ issue.path, issue.message }), issue),
                         }
                     } else {
                         return s.repair("You must call the `" ++ agent_mod.final_answer_tool ++ "` tool with your final answer.", .{ .path = "$", .message = "no final_answer call" });
@@ -1136,7 +1134,7 @@ pub fn Stream(comptime A: type) type {
             s.run_span.end();
             try s.push(@unionInit(A.Event, "finish", ev.Finish{ .reason = reason, .steps = s.step, .usage = s.usage }));
             s.phase = .done;
-            s.saveStatus(if (reason == .canceled) "canceled" else "completed");
+            s.saveStatus(if (reason == .canceled) .canceled else .completed);
         }
 
         fn save(s: *Self) Error!void {
@@ -1197,35 +1195,8 @@ pub const ApprovalDecision = struct {
 
 /// Load a suspended run, check it, claim it and apply `decisions`.
 fn reopen(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []const u8, decisions: []const ApprovalDecision) Error!*Stream(A) {
-    const store = st.storage orelse return error.StorageFailed;
-    const rec = (store.loadRun(arena, run_id) catch |err| {
-        st.diagPrint("agent '{s}': loading run '{s}': {t}", .{ A.id, run_id, err });
-        return error.StorageFailed;
-    }) orelse {
-        st.diagPrint("agent '{s}': no saved run '{s}'", .{ A.id, run_id });
-        return error.RunNotFound;
-    };
-    if (rec.kind != .agent or !std.mem.eql(u8, rec.owner_id, A.id)) {
-        st.diagPrint("run '{s}' belongs to {t} '{s}', not agent '{s}'", .{ run_id, rec.kind, rec.owner_id, A.id });
-        return error.WrongAgent;
-    }
-    if (!std.mem.eql(u8, rec.status, "suspended")) {
-        st.diagPrint("agent '{s}' run '{s}' is {s}, not suspended", .{ A.id, run_id, rec.status });
-        return if (std.mem.eql(u8, rec.status, "running")) error.RunBusy else error.NotSuspended;
-    }
-    var issue: parse.Issue = .{};
-    const snap = parse.parse(Snapshot, arena, rec.state_json, &issue) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.ValidationFailed => {
-            st.diagPrint("agent '{s}' run '{s}': saved run doesn't parse: {f}", .{ A.id, run_id, issue });
-            return error.CorruptSnapshot;
-        },
-    };
-    if (rec.fingerprint != A.run_fingerprint and !migratable(A, snap)) {
-        st.diagPrint("agent '{s}' run '{s}' was saved by a different version of the agent: {f}. Deny its approvals and start a new run", .{ A.id, run_id, Changes(A){ .saved = snap.tools } });
-        return error.SnapshotIncompatible;
-    }
-    const s = Stream(A).restore(st, arena, try arena.dupe(u8, run_id), snap) catch |err| {
+    const opened = try runs.open(st, arena, run_id, .{ .kind = .agent, .id = A.id }, Accept(A).f);
+    const s = Stream(A).restore(st, arena, try arena.dupe(u8, run_id), opened.state) catch |err| {
         if (err == error.CorruptSnapshot) st.diagPrint("agent '{s}' run '{s}': saved run is inconsistent", .{ A.id, run_id });
         return err;
     };
@@ -1241,13 +1212,30 @@ fn reopen(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []cons
             return error.UnknownApproval;
         }
     }
-    const claimed = store.claimRun(run_id, "suspended", "running", st.nowMs()) catch return error.StorageFailed;
-    if (!claimed) {
-        st.diagPrint("agent '{s}' run '{s}' is already being resumed", .{ A.id, run_id });
-        return error.RunBusy;
-    }
+    try opened.claim();
     for (decisions) |d| try s.respond(d.id, d.decision);
     return s;
+}
+
+/// Parse a saved agent run and check it was saved by this version of `A`.
+fn Accept(comptime A: type) type {
+    return struct {
+        fn f(st: *runtime.State, arena: Allocator, rec: runs.Record) error{ OutOfMemory, CorruptSnapshot, SnapshotIncompatible }!Snapshot {
+            var issue: parse.Issue = .{};
+            const snap = parse.parse(Snapshot, arena, rec.state_json, &issue) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.ValidationFailed => {
+                    st.diagPrint("agent '{s}' run '{s}': saved run doesn't parse: {f}", .{ A.id, rec.run_id, issue });
+                    return error.CorruptSnapshot;
+                },
+            };
+            if (rec.fingerprint != A.run_fingerprint and !migratable(A, snap)) {
+                st.diagPrint("agent '{s}' run '{s}' was saved by a different version of the agent: {f}. Deny its approvals and start a new run", .{ A.id, rec.run_id, Changes(A){ .saved = snap.tools } });
+                return error.SnapshotIncompatible;
+            }
+            return snap;
+        }
+    };
 }
 
 /// A run saved before a working-memory change that `z.migrate` covers: the
@@ -1314,17 +1302,5 @@ pub fn resumeStream(comptime A: type, st: *runtime.State, arena: Allocator, run_
 
 /// Abandon a suspended run: it's marked `canceled` and can't be resumed.
 pub fn cancelRun(comptime A: type, st: *runtime.State, arena: Allocator, run_id: []const u8) Error!void {
-    const store = st.storage orelse return error.StorageFailed;
-    const rec = (store.loadRun(arena, run_id) catch return error.StorageFailed) orelse {
-        st.diagPrint("agent '{s}': no saved run '{s}'", .{ A.id, run_id });
-        return error.RunNotFound;
-    };
-    if (rec.kind != .agent or !std.mem.eql(u8, rec.owner_id, A.id)) {
-        st.diagPrint("run '{s}' belongs to {t} '{s}', not agent '{s}'", .{ run_id, rec.kind, rec.owner_id, A.id });
-        return error.WrongAgent;
-    }
-    if (!(store.claimRun(run_id, "suspended", "canceled", st.nowMs()) catch return error.StorageFailed)) {
-        st.diagPrint("agent '{s}' run '{s}' is {s}, not suspended", .{ A.id, run_id, rec.status });
-        return if (std.mem.eql(u8, rec.status, "running")) error.RunBusy else error.NotSuspended;
-    }
+    return runs.cancelRun(st, arena, run_id, .{ .kind = .agent, .id = A.id });
 }

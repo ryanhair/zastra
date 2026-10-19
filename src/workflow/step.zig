@@ -8,6 +8,7 @@ const make = @import("../meta/make.zig");
 const template = @import("../prompt/template.zig");
 const agent_mod = @import("../agent/agent.zig");
 const agent_run = @import("../agent/run.zig");
+const runs = @import("../runs.zig");
 const runtime = @import("../runtime.zig");
 const trace = @import("../trace/trace.zig");
 const ev = @import("../agent/events.zig");
@@ -220,9 +221,11 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
         step_id: []const u8,
         resource: ?[]const u8,
         trace_id: trace.TraceId,
-        /// Internal: numbers this step's `w.agent(A).run` calls, for their
-        /// saved run ids.
+        /// Internal: numbers this attempt's `w.agent(A).run` calls, for
+        /// their saved run ids.
         agent_calls: u32 = 0,
+        /// Internal: the retry attempt, part of those ids (D63).
+        attempt: u32 = 0,
         /// Internal: `"@<i>"` per enclosing `z.step.loop` iteration, so a
         /// saved agent run belongs to one iteration (D46).
         iteration: []const u8 = "",
@@ -275,19 +278,14 @@ pub fn StepCtx(comptime Ctx: type, comptime S: type) type {
                     const w = c.w;
                     const n = w.agent_calls;
                     w.agent_calls += 1;
-                    const id = try w.arena.print("{s}/{s}{s}#{d}", .{ w.run_id, w.step_id, w.iteration, n });
+                    const id = try runs.childId(w.arena, w.run_id, w.step_id, w.iteration, w.attempt, n);
                     var o = try c.options(opts);
                     o.run_id = id;
                     o.keep_result = true;
-                    const store = w.state.storage orelse return error.StorageFailed;
-                    const rec = store.loadRun(w.arena, id) catch return error.StorageFailed;
-                    const r: agent_run.RunResult(A) = if (rec) |saved| blk: {
-                        if (std.mem.eql(u8, saved.status, "completed"))
+                    const found = try runs.findChild(w.state, w.arena, id, .{ .kind = .agent, .id = A.id });
+                    const r: agent_run.RunResult(A) = if (found) |saved| blk: {
+                        if (saved.status == .completed)
                             return .{ .done = try agent_run.loadKeptResult(A, w.arena, id, saved.state_json) };
-                        if (!std.mem.eql(u8, saved.status, "suspended")) {
-                            w.state.diagPrint("step '{s}': agent '{s}' run '{s}' is {s}", .{ w.step_id, A.id, id, saved.status });
-                            return if (std.mem.eql(u8, saved.status, "running")) error.RunBusy else error.NotSuspended;
-                        }
                         // The step's decisions go to the first suspended call.
                         var decisions: []const agent_run.ApprovalDecision = &.{};
                         if (w.resumed) |d| {
@@ -374,7 +372,6 @@ fn PromptText(comptime In: type, comptime opts: anytype) type {
         }
     };
 }
-
 
 /// `z.step.parallel(.{ .order = FetchOrder, .faq = SearchFaq })`: run steps
 /// concurrently on the same Input. Output is a struct keyed like the input.

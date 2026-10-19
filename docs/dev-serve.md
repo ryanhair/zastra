@@ -35,7 +35,7 @@ Errors are JSON:
 |---|---|
 | 400 | Bad input: `InvalidInput`, `UnknownApproval` |
 | 404 | `NotFound`, `UnknownAgent`, `UnknownWorkflow`, `RunNotFound`, `TraceNotFound`, `NoStorage`, `NoTraceFile` |
-| 409 | `RunBusy`, `NotSuspended`, `NotSuspendedAtStep`, `WrongAgent`, `WrongWorkflow`, `SnapshotIncompatible` |
+| 409 | `RunBusy`, `NotSuspended`, `NotSuspendedAtStep`, `WrongOwner`, `SnapshotIncompatible` |
 | 502 | The provider failed: `Unauthorized`, `RateLimited`, `ProviderError`, `MissingApiKey`, `OutputInvalid`, ... |
 | 500 | Anything else |
 

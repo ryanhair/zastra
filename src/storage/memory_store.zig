@@ -107,7 +107,7 @@ pub const MemoryStore = struct {
             .kind = r.kind,
             .owner_id = try gpa.dupe(u8, r.owner_id),
             .fingerprint = r.fingerprint,
-            .status = try gpa.dupe(u8, r.status),
+            .status = r.status,
             .suspended_at = if (r.suspended_at) |s| try gpa.dupe(u8, s) else null,
             .state_json = try gpa.dupe(u8, r.state_json),
             .created_at = r.created_at,
@@ -118,7 +118,6 @@ pub const MemoryStore = struct {
     fn freeRun(gpa: Allocator, r: storage.RunRecord) void {
         gpa.free(r.run_id);
         gpa.free(r.owner_id);
-        gpa.free(r.status);
         if (r.suspended_at) |s| gpa.free(s);
         gpa.free(r.state_json);
     }
@@ -129,10 +128,16 @@ pub const MemoryStore = struct {
         const copy = try dupeRun(m.gpa, run);
         const gop = try m.runs.getOrPut(m.gpa, run.run_id);
         if (gop.found_existing) {
-            const created = gop.value_ptr.created_at;
-            freeRun(m.gpa, gop.value_ptr.*);
+            // Like sqlite: a run's kind, owner and creation time are fixed.
+            const old = gop.value_ptr.*;
             gop.value_ptr.* = copy;
-            gop.value_ptr.created_at = created;
+            gop.value_ptr.kind = old.kind;
+            gop.value_ptr.created_at = old.created_at;
+            m.gpa.free(copy.owner_id);
+            gop.value_ptr.owner_id = old.owner_id;
+            m.gpa.free(old.run_id);
+            if (old.suspended_at) |at| m.gpa.free(at);
+            m.gpa.free(old.state_json);
         } else {
             gop.key_ptr.* = try m.gpa.dupe(u8, run.run_id);
             gop.value_ptr.* = copy;
@@ -153,21 +158,26 @@ pub const MemoryStore = struct {
         for (m.runs.values()) |r| {
             if (filter.kind) |k| if (k != r.kind) continue;
             if (filter.owner_id) |w| if (!std.mem.eql(u8, w, r.owner_id)) continue;
-            if (filter.status) |st| if (!std.mem.eql(u8, st, r.status)) continue;
-            if (out.items.len >= filter.limit) break;
-            try out.append(arena, try dupeRun(arena, r));
+            if (filter.status) |st| if (st != r.status) continue;
+            try out.append(arena, r);
         }
-        return out.items;
+        // Newest first, like sqlite's `ORDER BY updated_at DESC`.
+        std.mem.sort(storage.RunRecord, out.items, {}, struct {
+            fn newer(_: void, a: storage.RunRecord, b: storage.RunRecord) bool {
+                return a.updated_at > b.updated_at;
+            }
+        }.newer);
+        const kept = out.items[0..@min(out.items.len, filter.limit)];
+        for (kept) |*r| r.* = try dupeRun(arena, r.*);
+        return kept;
     }
 
-    pub fn claimRun(m: *MemoryStore, run_id: []const u8, from: []const u8, to: []const u8, now: i64) !bool {
+    pub fn claimRun(m: *MemoryStore, run_id: []const u8, from: storage.RunStatus, to: storage.RunStatus, now: i64) !bool {
         m.mutex.lockUncancelable(m.io);
         defer m.mutex.unlock(m.io);
         const r = m.runs.getPtr(run_id) orelse return false;
-        if (!std.mem.eql(u8, r.status, from)) return false;
-        const status = try m.gpa.dupe(u8, to);
-        m.gpa.free(r.status);
-        r.status = status;
+        if (r.status != from) return false;
+        r.status = to;
         r.updated_at = now;
         return true;
     }

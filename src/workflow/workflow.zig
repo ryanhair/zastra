@@ -368,6 +368,9 @@ fn Committed(comptime Ctx_: type, comptime wf: []const u8, comptime In: type, co
             /// Set while resuming: where, and the resume value as JSON.
             resume_at: ?[]const u8 = null,
             resume_json: ?[]const u8 = null,
+            /// The retry attempt the suspended step was on: a resume
+            /// replays that attempt, so it finds its agent runs (D63).
+            suspended_attempt: u32 = 0,
         };
 
         // Suspended union: one variant per suspendable step id.

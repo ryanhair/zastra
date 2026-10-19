@@ -8,6 +8,7 @@ const json = @import("../schema/json.zig");
 const parse = @import("../schema/parse.zig");
 const msg = @import("../message.zig");
 const run = @import("../agent/run.zig");
+const runs = @import("../runs.zig");
 const ev = @import("../agent/events.zig");
 const trace = @import("../trace/trace.zig");
 const manifest = @import("manifest.zig");
@@ -299,6 +300,18 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
             return null;
         }
 
+        fn runCancel(h: ?*AppHandle, run_id: ?[*:0]const u8, err: ?*Error) callconv(.c) c_int {
+            clearErr(err);
+            const a = h orelse return @backingInt(Status.err);
+            var arena: std.heap.ArenaAllocator = .init(gpa);
+            defer arena.deinit();
+            a.rt.runs().cancel(arena.allocator(), span(run_id) orelse "") catch |e| {
+                setErr(err, .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
+                return @backingInt(Status.err);
+            };
+            return @backingInt(Status.ok);
+        }
+
         fn agentCancel(h: ?*AppHandle, agent_id: c_int, run_id: ?[*:0]const u8, err: ?*Error) callconv(.c) c_int {
             clearErr(err);
             const a = h orelse return @backingInt(Status.err);
@@ -460,9 +473,8 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
             const aa = arena.allocator();
             const rid = span(run_id) orelse "";
             const sid = span(step_id) orelse "";
-            const store = a.rt.state().storage orelse return null;
-            const rec = (store.loadRun(aa, rid) catch null) orelse {
-                setErr(err, .invalid_input, "no run '{s}'", .{rid});
+            const rec = runs.load(a.rt.state(), aa, rid, null) catch |e| {
+                setErr(err, if (e == error.RunNotFound) .invalid_input else .err, "{t}: {s}", .{ e, a.rt.lastDiagnostic() });
                 return null;
             };
             inline for (App.workflows) |W| if (rec.kind == .workflow and std.mem.eql(u8, W.id, rec.owner_id)) {
@@ -495,6 +507,7 @@ pub fn exportAll(comptime App: type, comptime app_mod: type, comptime lib: []con
     @export(&Impl.agentCancel, .{ .name = lib ++ "_agent_cancel" });
     @export(&Impl.workflowStart, .{ .name = lib ++ "_workflow_start" });
     @export(&Impl.workflowResume, .{ .name = lib ++ "_workflow_resume" });
+    @export(&Impl.runCancel, .{ .name = lib ++ "_run_cancel" });
     @export(&abiVersion, .{ .name = "zastra_abi_version" });
     @export(&streamNext, .{ .name = "zastra_stream_next" });
     @export(&streamRespond, .{ .name = "zastra_stream_respond" });

@@ -325,6 +325,11 @@ fn RuntimeOf(comptime AppT: type) type {
             return .{ .st = rt.st };
         }
 
+        /// Saved runs of every agent and workflow: `list`, `get`, `cancel`.
+        pub fn runs(rt: *Self) @import("runs.zig").Handle(AppT) {
+            return .{ .st = rt.st };
+        }
+
         /// Details of the last failure: a provider error body, a validation
         /// path, missing environment variables.
         pub fn lastDiagnostic(rt: *Self) []const u8 {

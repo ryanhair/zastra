@@ -191,11 +191,10 @@ test "a gated agent suspends in iteration 2 and resumes after a restart" {
         req_id = try std.fmt.bufPrint(&req_id_buf, "{s}", .{paused.payload.requests[0].id});
         // Each iteration's agent call is its own saved run.
         const a = h.arena.allocator();
-        const store = h.rt.state().storage.?;
-        const first = (try store.loadRun(a, try a.print("{s}/loop_editor.editor@0#0", .{run_id}))).?;
-        try t.expectEqualStrings("completed", first.status);
-        const second = (try store.loadRun(a, try a.print("{s}/loop_editor.editor@1#0", .{run_id}))).?;
-        try t.expectEqualStrings("suspended", second.status);
+        const first = (try h.runs().get(try z.testing.childRunId(a, run_id, "loop_editor.editor", "@0", 0, 0))).?;
+        try t.expectEqual(z.RunStatus.completed, first.status);
+        const second = (try h.runs().get(try z.testing.childRunId(a, run_id, "loop_editor.editor", "@1", 0, 0))).?;
+        try t.expectEqual(z.RunStatus.suspended, second.status);
     }
     var h = try z.testing.harness(App, .{ .ctx = &ctx, .storage_path = path });
     defer h.deinit();

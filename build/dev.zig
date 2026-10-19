@@ -536,22 +536,15 @@ fn runWorkflow(rt: *App.Runtime, io: Io, arena: Allocator, out: Out, rest: []con
 }
 
 fn listRuns(rt: *App.Runtime, arena: Allocator, out: Out, rest: []const []const u8) !u8 {
-    const store = rt.state().storage orelse return 1;
-    const runs = try store.listRuns(arena, .{ .status = if (has(rest, "--suspended")) "suspended" else null });
+    const runs = rt.runs().list(arena, .{ .status = if (has(rest, "--suspended")) .suspended else null }) catch |err| {
+        out.print("error: {t}: {s}\n", .{ err, rt.lastDiagnostic() });
+        return 1;
+    };
     if (runs.len == 0) out.write("no runs\n");
     for (runs) |r| {
-        var current = false;
-        switch (r.kind) {
-            .workflow => inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, r.owner_id)) {
-                current = r.fingerprint == W.fingerprint_value;
-            },
-            .agent => inline for (App.agents) |A| if (std.mem.eql(u8, A.id, r.owner_id)) {
-                current = r.fingerprint == A.run_fingerprint;
-            },
-        }
-        out.print("{s}  {t} {s}  {s}{s}{s}{s}\n", .{
-            r.run_id,                                                                                                         r.kind, r.owner_id, r.status, if (r.suspended_at != null) " at " else "", r.suspended_at orelse "",
-            if (current or !std.mem.eql(u8, r.status, "suspended")) "" else "  (saved by a different version; can't resume)",
+        out.print("{s}  {t} {s}  {t}{s}{s}{s}\n", .{
+            r.run_id,                                                                                            r.kind, r.owner_id, r.status, if (r.suspended_at != null) " at " else "", r.suspended_at orelse "",
+            if (r.resumable or r.status != .suspended) "" else "  (saved by a different version; can't resume)",
         });
     }
     return 0;
@@ -562,8 +555,10 @@ fn resumeRun(rt: *App.Runtime, io: Io, arena: Allocator, out: Out, rest: []const
         out.write("usage: resume <run_id> <json | @file.json>\n");
         return 2;
     }
-    const store = rt.state().storage orelse return 1;
-    const rec = (try store.loadRun(arena, rest[0])) orelse {
+    const rec = (rt.runs().get(arena, rest[0]) catch |err| {
+        out.print("error: {t}: {s}\n", .{ err, rt.lastDiagnostic() });
+        return 1;
+    }) orelse {
         out.print("no run '{s}'\n", .{rest[0]});
         return 1;
     };
@@ -576,7 +571,7 @@ fn resumeRun(rt: *App.Runtime, io: Io, arena: Allocator, out: Out, rest: []const
         return 1;
     }
     const at = rec.suspended_at orelse {
-        out.print("run '{s}' is {s}, not suspended\n", .{ rest[0], rec.status });
+        out.print("run '{s}' is {t}, not suspended\n", .{ rest[0], rec.status });
         return 1;
     };
     inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, rec.owner_id)) {

@@ -43,7 +43,8 @@ const migrations = [_][]const u8{
     @embedFile("migrations/0002_runs.sql"),
 };
 
-pub const Error = error{ SqliteError, OutOfMemory };
+/// `CorruptSnapshot`: a saved run's status isn't one zastra writes.
+pub const Error = error{ SqliteError, OutOfMemory, CorruptSnapshot };
 
 pub const SqliteStore = struct {
     gpa: Allocator,
@@ -258,7 +259,7 @@ pub const SqliteStore = struct {
         try st.text(1, r.run_id);
         try st.text(2, r.owner_id);
         try st.int(3, @bitCast(r.fingerprint));
-        try st.text(4, r.status);
+        try st.text(4, @tagName(r.status));
         try st.optText(5, r.suspended_at);
         try st.text(6, r.state_json);
         try st.int(7, r.created_at);
@@ -273,7 +274,7 @@ pub const SqliteStore = struct {
             .owner_id = (try st.colText(arena, 1)) orelse "",
             .kind = std.meta.stringToEnum(storage.RunKind, (try st.colText(arena, 8)) orelse "") orelse .workflow,
             .fingerprint = @bitCast(st.colInt(2)),
-            .status = (try st.colText(arena, 3)) orelse "",
+            .status = std.meta.stringToEnum(storage.RunStatus, (try st.colText(arena, 3)) orelse "") orelse return error.CorruptSnapshot,
             .suspended_at = try st.colText(arena, 4),
             .state_json = (try st.colText(arena, 5)) orelse "",
             .created_at = st.colInt(6),
@@ -299,7 +300,7 @@ pub const SqliteStore = struct {
         var st = try s.prepare("SELECT " ++ run_cols ++ " FROM runs WHERE (?1 IS NULL OR owner_id = ?1) AND (?2 IS NULL OR status = ?2) AND (?4 IS NULL OR kind = ?4) ORDER BY updated_at DESC LIMIT ?3;");
         defer st.deinit();
         try st.optText(1, filter.owner_id);
-        try st.optText(2, filter.status);
+        try st.optText(2, if (filter.status) |x| @tagName(x) else null);
         try st.int(3, filter.limit);
         try st.optText(4, if (filter.kind) |k| @tagName(k) else null);
         var out: std.ArrayList(storage.RunRecord) = .empty;
@@ -307,14 +308,14 @@ pub const SqliteStore = struct {
         return out.items;
     }
 
-    pub fn claimRun(s: *SqliteStore, run_id: []const u8, from: []const u8, to: []const u8, now: i64) Error!bool {
+    pub fn claimRun(s: *SqliteStore, run_id: []const u8, from: storage.RunStatus, to: storage.RunStatus, now: i64) Error!bool {
         s.lock();
         defer s.unlock();
         var st = try s.prepare("UPDATE runs SET status = ?3, updated_at = ?4 WHERE run_id = ?1 AND status = ?2;");
         defer st.deinit();
         try st.text(1, run_id);
-        try st.text(2, from);
-        try st.text(3, to);
+        try st.text(2, @tagName(from));
+        try st.text(3, @tagName(to));
         try st.int(4, now);
         try st.done();
         return sqlite3_changes(s.db) == 1;
@@ -335,17 +336,17 @@ test SqliteStore {
     try iface.putWorkingMemory("c1", "a", 43, "{\"x\":2}", 2);
     const w = (try iface.getWorkingMemory(arena.allocator(), "c1", "a")).?;
     try std.testing.expectEqual(@as(u64, 43), w.fingerprint);
-    try iface.saveRun(.{ .run_id = "r1", .kind = .workflow, .owner_id = "w", .fingerprint = 0xFFFF_FFFF_FFFF_FFFF, .status = "suspended", .suspended_at = "s", .state_json = "{}", .created_at = 1, .updated_at = 1 });
+    try iface.saveRun(.{ .run_id = "r1", .kind = .workflow, .owner_id = "w", .fingerprint = 0xFFFF_FFFF_FFFF_FFFF, .status = .suspended, .suspended_at = "s", .state_json = "{}", .created_at = 1, .updated_at = 1 });
     const r = (try iface.loadRun(arena.allocator(), "r1")).?;
     try std.testing.expectEqual(@as(u64, 0xFFFF_FFFF_FFFF_FFFF), r.fingerprint);
-    const runs = try iface.listRuns(arena.allocator(), .{ .status = "suspended" });
+    const runs = try iface.listRuns(arena.allocator(), .{ .status = .suspended });
     try std.testing.expectEqual(@as(usize, 1), runs.len);
     try std.testing.expectEqual(storage.RunKind.workflow, runs[0].kind);
     try std.testing.expectEqual(@as(usize, 0), (try iface.listRuns(arena.allocator(), .{ .kind = .agent })).len);
     // claimRun is a compare-and-set on the status.
-    try std.testing.expect(try iface.claimRun("r1", "suspended", "running", 2));
-    try std.testing.expect(!try iface.claimRun("r1", "suspended", "running", 3));
-    try std.testing.expect(!try iface.claimRun("nope", "suspended", "running", 3));
+    try std.testing.expect(try iface.claimRun("r1", .suspended, .running, 2));
+    try std.testing.expect(!try iface.claimRun("r1", .suspended, .running, 3));
+    try std.testing.expect(!try iface.claimRun("nope", .suspended, .running, 3));
 }
 
 test "migration 0002 renames workflow_runs and keeps v1 rows" {

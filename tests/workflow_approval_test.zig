@@ -158,7 +158,7 @@ test "a custom step with two gated agent calls replays without repeating the fir
     try t.expectEqual(@as(u32, 2), db.refunds.load(.monotonic));
     try t.expectEqual(@as(usize, 0), h.remaining(Refunder));
     // Two agent runs, saved under the workflow run.
-    const runs = try h.rt.state().storage.?.listRuns(h.arena.allocator(), .{ .kind = .agent, .owner_id = "refunder" });
+    const runs = try h.runs().list(.{ .kind = .agent, .owner_id = "refunder" });
     try t.expectEqual(@as(usize, 2), runs.len);
     for (runs) |r| try t.expect(std.mem.startsWith(u8, r.run_id, p1.run_id));
 }
@@ -170,7 +170,7 @@ test "a workflow run being resumed elsewhere is RunBusy" {
     defer h.deinit();
     h.script(Refunder, &.{.tool(IssueRefund, .{ .order_id = "ORD-1", .amount_cents = 90_00 })});
     const paused = try z.testing.expectSuspended(try h.workflow(Flow).start(.{ .order_id = "ORD-1", .cents = 90_00 }), .refunder);
-    try t.expect(try h.rt.state().storage.?.claimRun(paused.run_id, "suspended", "running", 0));
+    try h.claimRun(paused.run_id);
     try t.expectError(error.RunBusy, h.workflow(Flow).resumeStep(RefundStep, paused.run_id, .{ .approve = &.{paused.payload.requests[0].id} }));
     try t.expectEqual(@as(u32, 0), db.refunds.load(.monotonic));
 }

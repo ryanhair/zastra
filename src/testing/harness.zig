@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 const http = @import("../provider/http.zig");
 const scripted = @import("scripted.zig");
 const run = @import("../agent/run.zig");
+const runs_mod = @import("../runs.zig");
 const catalog = @import("../catalog/catalog.zig");
 const model_mod = @import("../model.zig");
 const msg = @import("../message.zig");
@@ -192,6 +193,35 @@ pub fn Harness(comptime AppT: type) type {
             return .{ .h = h, .inner = h.rt.workflow(W) };
         }
 
+        /// `rt.runs()`, with results in the harness arena.
+        pub fn runs(h: *Self) RunsHandle {
+            return .{ .h = h, .inner = h.rt.runs() };
+        }
+
+        pub const RunsHandle = struct {
+            h: *Self,
+            inner: runs_mod.Handle(AppT),
+
+            pub fn list(r: RunsHandle, filter: runs_mod.Filter) ![]const runs_mod.Info {
+                return r.inner.list(r.h.arena.allocator(), filter);
+            }
+
+            pub fn get(r: RunsHandle, run_id: []const u8) !?runs_mod.Info {
+                return r.inner.get(r.h.arena.allocator(), run_id);
+            }
+
+            pub fn cancel(r: RunsHandle, run_id: []const u8) !void {
+                return r.inner.cancel(r.h.arena.allocator(), run_id);
+            }
+        };
+
+        /// Claim a suspended run the way a resume in another process would,
+        /// so the next resume here finds it busy.
+        pub fn claimRun(h: *Self, run_id: []const u8) !void {
+            const store = h.rt.state().storage orelse return error.NoStorage;
+            if (!try store.claimRun(run_id, .suspended, .running, h.rt.state().nowMs())) return error.NotSuspended;
+        }
+
         pub fn AgentHandle(comptime A: type) type {
             return struct {
                 h: *Self,
@@ -231,6 +261,10 @@ pub fn Harness(comptime AppT: type) type {
 
                 pub fn resumeStep(wh: @This(), comptime S: type, run_id: []const u8, value: Inner.ResumeOf(S)) !W.Result {
                     return wh.inner.resumeStep(S, wh.h.arena.allocator(), run_id, value);
+                }
+
+                pub fn cancelRun(wh: @This(), run_id: []const u8) !void {
+                    return wh.inner.cancelRun(wh.h.arena.allocator(), run_id);
                 }
             };
         }

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+- `error.WrongAgent` and `error.WrongWorkflow` are now `error.WrongOwner` (agents, workflows and `dev serve`'s error codes).
+- A saved run's status is an enum, `z.RunStatus`, not a string. Storage backends store its tag name, so existing databases keep working.
+- A workflow step's agent runs are saved as `<run>/<step><iteration>~<attempt>#<n>` (was `...#<n>`). A workflow run saved by an earlier version while suspended in a gated agent step doesn't find its agent run when resumed: the agent runs again and asks for its approvals again.
+
+### Added
+- `rt.runs()`: `list`, `get` and `cancel` over every saved run, returning `z.RunInfo` (with `resumable`). `z.RunFilter` and `z.RunKind` are public too (D63).
+- `rt.workflow(W).cancelRun(arena, run_id)`, and `<lib>_run_cancel` in the C ABI, for runs of any agent or workflow.
+- `z.testing.childRunId(...)`, the harness's `h.runs()` and `h.claimRun(run_id)`, which claims a run the way another process's resume would.
+- A storage conformance suite that runs against both backends.
+
+### Fixed
+- A step with `retry` that calls `w.agent(A).run` reused the wrong saved agent run after a resume: retries were numbered past the first attempt's ids, a replay started again from `#0`, found the failed attempt's run and returned `NotSuspended`. Each attempt now has its own ids, and a resume replays the attempt that suspended.
+- Resuming a workflow run that is being resumed elsewhere reports `RunBusy` even when the snapshot is also from another version. It used to report `SnapshotIncompatible`.
+- `dev serve` canceled workflow runs with the wall clock, not the runtime's clock.
+- The memory store listed runs in insertion order and replaced a run's owner and kind when it was saved again. It now matches sqlite.
+
 ## v1.4.0 (2026-10-18)
 
 ### Breaking changes

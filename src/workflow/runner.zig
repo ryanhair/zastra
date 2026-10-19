@@ -15,19 +15,23 @@ const wf_mod = @import("workflow.zig");
 const json = @import("../schema/json.zig");
 const parse = @import("../schema/parse.zig");
 const trace = @import("../trace/trace.zig");
-const storage = @import("../storage/storage.zig");
+const runs = @import("../runs.zig");
 const Allocator = std.mem.Allocator;
 
 pub const Error = error{
     OutOfMemory,
     /// The snapshot couldn't be written or read.
     StorageFailed,
+    /// `resumeStep`/`cancelRun` on an App without storage.
+    NoStorage,
     /// No run with that id.
     RunNotFound,
-    /// The run belongs to a different workflow.
-    WrongWorkflow,
+    /// The run belongs to a different workflow, or to an agent.
+    WrongOwner,
     /// The run is not suspended at the step passed to `resumeStep`.
     NotSuspendedAtStep,
+    /// `cancelRun`: the run isn't suspended.
+    NotSuspended,
     /// The snapshot was taken with a different workflow shape and no
     /// migration covers it (PLAN.md §5.8). The diagnostic has both fingerprints.
     SnapshotIncompatible,
@@ -87,66 +91,66 @@ pub fn Handle(comptime W: type) type {
         /// For a `z.step.agent(A, ...)` step, `S` can be `z.step.agentOf(A)`.
         pub fn resumeStep(h: Self, comptime S_: type, arena: Allocator, run_id: []const u8, value: ResumeOf(S_)) Error!W.Result {
             const S = StepOf(S_);
-            const store = h.st.storage orelse return error.StorageFailed;
-            const rec = (store.loadRun(arena, run_id) catch return error.StorageFailed) orelse {
-                h.st.diagPrint("workflow '{s}': no run '{s}'", .{ W.id, run_id });
-                return error.RunNotFound;
+            const opened = runs.open(h.st, arena, run_id, .{ .kind = .workflow, .id = W.id }, Accept(S).f) catch |err| switch (err) {
+                error.NotSuspended => return error.NotSuspendedAtStep,
+                else => |e| return e,
             };
-            if (rec.kind != .workflow or !std.mem.eql(u8, rec.owner_id, W.id)) {
-                h.st.diagPrint("run '{s}' belongs to {t} '{s}', not workflow '{s}'", .{ run_id, rec.kind, rec.owner_id, W.id });
-                return error.WrongWorkflow;
-            }
-            var state_json = rec.state_json;
-            if (rec.fingerprint != W.fingerprint_value) {
-                const mig = for (W.migrations) |m| {
-                    if (m.from == rec.fingerprint) break m;
-                } else {
-                    h.st.diagPrint("workflow '{s}' run '{s}': snapshot fingerprint 0x{x:0>16} doesn't match the current workflow (0x{x:0>16}) and no migration covers it", .{ W.id, run_id, rec.fingerprint, W.fingerprint_value });
-                    return error.SnapshotIncompatible;
-                };
-                state_json = mig.migrate(arena, state_json) catch {
-                    h.st.diagPrint("workflow '{s}' run '{s}': migration from 0x{x:0>16} failed", .{ W.id, run_id, rec.fingerprint });
-                    return error.SnapshotIncompatible;
-                };
-            }
-            const at = rec.suspended_at orelse "";
-            if (std.mem.eql(u8, rec.status, "running")) {
-                h.st.diagPrint("workflow '{s}' run '{s}' is running (being resumed elsewhere)", .{ W.id, run_id });
-                return error.RunBusy;
-            }
-            const ok = std.mem.eql(u8, rec.status, "suspended") and pathIsStep(S, at);
-            if (!ok) {
-                h.st.diagPrint("workflow '{s}' run '{s}' is {s}{s}{s}, not suspended at '{s}'", .{
-                    W.id, run_id, rec.status, if (at.len > 0) " at " else "", at, comptime step.idOf(S),
-                });
-                return error.NotSuspendedAtStep;
-            }
-            var issue: parse.Issue = .{};
-            const state = try arena.create(W.State);
-            state.* = parse.parse(W.State, arena, state_json, &issue) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.ValidationFailed => {
-                    h.st.diagPrint("workflow '{s}' run '{s}': stored state doesn't parse: {f}", .{ W.id, run_id, issue });
-                    return error.CorruptSnapshot;
-                },
-            };
-            state.resume_at = at;
+            const state = opened.state;
+            state.resume_at = opened.rec.suspended_at orelse "";
             state.resume_json = try json.stringifyAlloc(arena, value);
             // Only one resume may run: claim the run before executing anything.
-            const claimed = store.claimRun(run_id, "suspended", "running", h.st.nowMs()) catch return error.StorageFailed;
-            if (!claimed) {
-                h.st.diagPrint("workflow '{s}' run '{s}' is already being resumed", .{ W.id, run_id });
-                return error.RunBusy;
-            }
+            try opened.claim();
             var x: Exec(W) = .{
                 .st = h.st,
                 .arena = arena,
                 .state = state,
                 .run_id = try arena.dupe(u8, run_id),
                 .resource = null,
-                .created_at = rec.created_at,
+                .created_at = opened.rec.created_at,
             };
             return x.run();
+        }
+
+        /// Abandon a suspended run: it's marked `canceled` and can't be resumed.
+        pub fn cancelRun(h: Self, arena: Allocator, run_id: []const u8) Error!void {
+            return runs.cancelRun(h.st, arena, run_id, .{ .kind = .workflow, .id = W.id });
+        }
+
+        /// Check that a saved run is suspended at `S`, migrate it to the
+        /// current shape if it's older, and parse it.
+        fn Accept(comptime S: type) type {
+            return struct {
+                fn f(st: *runtime.State, arena: Allocator, rec: runs.Record) Error!*W.State {
+                    const at = rec.suspended_at orelse "";
+                    if (!pathIsStep(S, at)) {
+                        st.diagPrint("workflow '{s}' run '{s}' is suspended at '{s}', not at '{s}'", .{ W.id, rec.run_id, at, comptime step.idOf(S) });
+                        return error.NotSuspendedAtStep;
+                    }
+                    var state_json = rec.state_json;
+                    if (rec.fingerprint != W.fingerprint_value) {
+                        const mig = for (W.migrations) |m| {
+                            if (m.from == rec.fingerprint) break m;
+                        } else {
+                            st.diagPrint("workflow '{s}' run '{s}': snapshot fingerprint 0x{x:0>16} doesn't match the current workflow (0x{x:0>16}) and no migration covers it", .{ W.id, rec.run_id, rec.fingerprint, W.fingerprint_value });
+                            return error.SnapshotIncompatible;
+                        };
+                        state_json = mig.migrate(arena, state_json) catch {
+                            st.diagPrint("workflow '{s}' run '{s}': migration from 0x{x:0>16} failed", .{ W.id, rec.run_id, rec.fingerprint });
+                            return error.SnapshotIncompatible;
+                        };
+                    }
+                    var issue: parse.Issue = .{};
+                    const state = try arena.create(W.State);
+                    state.* = parse.parse(W.State, arena, state_json, &issue) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.ValidationFailed => {
+                            st.diagPrint("workflow '{s}' run '{s}': stored state doesn't parse: {f}", .{ W.id, rec.run_id, issue });
+                            return error.CorruptSnapshot;
+                        },
+                    };
+                    return state;
+                }
+            };
         }
 
         pub fn ResumeOf(comptime S: type) type {
@@ -203,17 +207,17 @@ fn Exec(comptime W: type) type {
             x.run_span = x.st.tracer.begin(.workflow_run, W.id, x.trace_id, null);
             x.run_span.attr("workflow", W.id);
             x.run_span.attr("run_id", x.run_id);
-            try x.save("running", null);
+            try x.save(.running, null);
             const out = execNodes(W.nodes, "", &.{}, W.Input, 0, x, x.state.input, x.state.input) catch |err| switch (err) {
                 error.WorkflowSuspended => {
-                    try x.save("suspended", x.suspended_at);
+                    try x.save(.suspended, x.suspended_at);
                     x.run_span.attr("suspended_at", x.suspended_at);
                     x.run_span.end();
                     if (comptime !W.can_suspend) unreachable;
                     return @unionInit(W.Result, "suspended", .{ .run_id = x.run_id, .at = x.suspended.? });
                 },
                 error.WorkflowStepFailed => {
-                    try x.save("failed", x.failed_step);
+                    try x.save(.failed, x.failed_step);
                     x.run_span.fail(x.failed_msg);
                     x.run_span.end();
                     x.st.diagPrint("{s}", .{x.failed_msg});
@@ -222,17 +226,17 @@ fn Exec(comptime W: type) type {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.StorageFailed => return error.StorageFailed,
             };
-            try x.save("completed", null);
+            try x.save(.completed, null);
             x.run_span.end();
             return .{ .completed = out };
         }
 
         const Flow = error{ WorkflowSuspended, WorkflowStepFailed, OutOfMemory, StorageFailed };
 
-        fn save(x: *X, status: []const u8, at: ?[]const u8) error{ OutOfMemory, StorageFailed }!void {
-            const store = x.st.storage orelse return;
+        fn save(x: *X, status: runs.Status, at: ?[]const u8) error{ OutOfMemory, StorageFailed }!void {
+            if (x.st.storage == null) return;
             const body = try json.stringifyAlloc(x.arena, x.state.*);
-            store.saveRun(.{
+            runs.save(x.st, .{
                 .run_id = x.run_id,
                 .kind = .workflow,
                 .owner_id = W.id,
@@ -242,10 +246,7 @@ fn Exec(comptime W: type) type {
                 .state_json = body,
                 .created_at = x.created_at,
                 .updated_at = x.st.nowMs(),
-            }) catch |err| {
-                x.st.diagPrint("workflow '{s}' run '{s}': saving snapshot: {t}", .{ W.id, x.run_id, err });
-                return error.StorageFailed;
-            };
+            }) catch return error.StorageFailed;
         }
 
         fn fail(x: *X, path: []const u8, err: anyerror, comptime fmt: []const u8, args: anytype) Flow {
@@ -287,7 +288,7 @@ fn Exec(comptime W: type) type {
                 inline for (n.arms, 0..) |arm, ai| {
                     if (arm.Pred == step.otherwise or arm.Pred.f(cur)) {
                         @field(x.state.steps, bpath) = ai;
-                        try x.save("running", null);
+                        try x.save(.running, null);
                         break :blk ai;
                     }
                 }
@@ -311,7 +312,7 @@ fn Exec(comptime W: type) type {
                 try execPlain(S, path, avail, Initial, x, initial, input, x.arena);
 
             @field(x.state.steps, path) = .{ .value = out };
-            try x.save("running", null);
+            try x.save(.running, null);
             return out;
         }
 
@@ -348,8 +349,11 @@ fn Exec(comptime W: type) type {
                 .iteration = x.iteration,
             };
             if (x.iteration.len > 0) span.attr("iteration", x.iteration);
+            var attempt: u32 = 0;
             if (comptime step.isSuspendable(S)) {
                 if (x.state.resume_at) |at| if (std.mem.eql(u8, at, path)) {
+                    // Replay the attempt that suspended, so its agent runs are found again.
+                    attempt = x.state.suspended_attempt;
                     var issue: parse.Issue = .{};
                     w.resumed = parse.parse(S.Resume, x.arena, x.state.resume_json orelse "null", &issue) catch
                         return x.fail(path, error.CorruptSnapshot, "step '{s}': resume value doesn't parse: {f}", .{ path, issue });
@@ -360,8 +364,9 @@ fn Exec(comptime W: type) type {
             }
 
             const retry: step.Retry = if (@hasDecl(S, "retry")) S.retry else .{};
-            var attempt: u32 = 0;
             while (true) : (attempt += 1) {
+                w.attempt = attempt;
+                w.agent_calls = 0;
                 const r = runOnce(S, &w, input);
                 if (r) |res| {
                     if (comptime step.isSuspendable(S)) switch (res) {
@@ -369,6 +374,7 @@ fn Exec(comptime W: type) type {
                         .suspended => |payload| {
                             x.suspended = @unionInit(W.Suspended, step.idOf(S), payload);
                             x.suspended_at = path;
+                            x.state.suspended_attempt = attempt;
                             span.attr("suspended", true);
                             return error.WorkflowSuspended;
                         },
@@ -472,7 +478,7 @@ fn Exec(comptime W: type) type {
                     if (comptime std.mem.startsWith(u8, sl.path, path ++ ".")) @field(x.state.steps, sl.path) = null;
                 }
                 @field(x.state.steps, progress) = .{ .iter = iter, .value = out };
-                try x.save("running", null);
+                try x.save(.running, null);
                 cur = out;
             }
         }

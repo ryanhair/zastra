@@ -13,6 +13,9 @@ pub const Kind = enum { memory, sqlite };
 /// What a saved run belongs to (PLAN.md D32).
 pub const RunKind = enum { agent, workflow };
 
+/// Where a saved run is in its life. Backends store the tag name.
+pub const RunStatus = enum { running, suspended, completed, failed, canceled };
+
 /// A saved run: a workflow run (every run, snapshotted after each step) or an
 /// agent run (only while suspended for approval, and its final status).
 pub const RunRecord = struct {
@@ -21,7 +24,7 @@ pub const RunRecord = struct {
     /// The workflow or agent id.
     owner_id: []const u8,
     fingerprint: u64,
-    status: []const u8,
+    status: RunStatus,
     suspended_at: ?[]const u8,
     state_json: []const u8,
     created_at: i64,
@@ -31,7 +34,7 @@ pub const RunRecord = struct {
 pub const RunFilter = struct {
     kind: ?RunKind = null,
     owner_id: ?[]const u8 = null,
-    status: ?[]const u8 = null,
+    status: ?RunStatus = null,
     limit: u32 = 100,
 };
 
@@ -47,10 +50,12 @@ pub const Storage = struct {
         putWorkingMemory: *const fn (ptr: *anyopaque, resource: []const u8, agent_id: []const u8, fingerprint: u64, value_json: []const u8, now: i64) anyerror!void,
         saveRun: *const fn (ptr: *anyopaque, run: RunRecord) anyerror!void,
         loadRun: *const fn (ptr: *anyopaque, arena: Allocator, run_id: []const u8) anyerror!?RunRecord,
+        /// Newest `updated_at` first. Saving an existing run keeps its
+        /// `kind`, `owner_id` and `created_at`.
         listRuns: *const fn (ptr: *anyopaque, arena: Allocator, filter: RunFilter) anyerror![]const RunRecord,
         /// Atomically move run `run_id` from status `from` to `to`; false if
         /// it isn't in status `from` (someone else claimed it, or it's gone).
-        claimRun: *const fn (ptr: *anyopaque, run_id: []const u8, from_status: []const u8, to_status: []const u8, now: i64) anyerror!bool,
+        claimRun: *const fn (ptr: *anyopaque, run_id: []const u8, from_status: RunStatus, to_status: RunStatus, now: i64) anyerror!bool,
     };
 
     pub const WorkingMemory = struct { fingerprint: u64, value_json: []const u8 };
@@ -76,7 +81,7 @@ pub const Storage = struct {
     pub fn listRuns(s: Storage, arena: Allocator, filter: RunFilter) ![]const RunRecord {
         return s.vtable.listRuns(s.ptr, arena, filter);
     }
-    pub fn claimRun(s: Storage, run_id: []const u8, from_status: []const u8, to_status: []const u8, now: i64) !bool {
+    pub fn claimRun(s: Storage, run_id: []const u8, from_status: RunStatus, to_status: RunStatus, now: i64) !bool {
         return s.vtable.claimRun(s.ptr, run_id, from_status, to_status, now);
     }
 
@@ -117,7 +122,7 @@ pub const Storage = struct {
             fn listRunsImpl(p: *anyopaque, arena: Allocator, filter: RunFilter) anyerror![]const RunRecord {
                 return cast(p).listRuns(arena, filter);
             }
-            fn claimRunImpl(p: *anyopaque, run_id: []const u8, from_status: []const u8, to_status: []const u8, now: i64) anyerror!bool {
+            fn claimRunImpl(p: *anyopaque, run_id: []const u8, from_status: RunStatus, to_status: RunStatus, now: i64) anyerror!bool {
                 return cast(p).claimRun(run_id, from_status, to_status, now);
             }
         };

@@ -161,6 +161,22 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    // ── 3b. Saved runs of every agent and workflow (D63) ─────────────────────
+    {
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        // Newest first. `resumable`: suspended, and saved by the version of
+        // its agent or workflow that this binary has.
+        for (try rt.runs().list(arena.allocator(), .{ .status = .suspended })) |run| {
+            std.log.info("{s}: {t} '{s}' at {s}, resumable={}", .{ run.run_id, run.kind, run.owner_id, run.suspended_at orelse "-", run.resumable });
+            // Give up on the ones a deploy left behind.
+            if (!run.resumable) try rt.runs().cancel(arena.allocator(), run.run_id);
+        }
+        // `get` adds the saved state; `rt.agent(A).cancelRun` and
+        // `rt.workflow(W).cancelRun` also check who the run belongs to
+        // (`error.WrongOwner`).
+    }
+
     // ── 4. Escape hatch: raw model call, no agent ────────────────────────────
     // Same provider layer, for when you just want a completion. The model
     // string is comptime, so only the providers you name are compiled in.

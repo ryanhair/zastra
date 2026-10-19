@@ -28,6 +28,20 @@ _Avoid_: dialect (alone), wire format
 The part of a request that is fixed for an agent (model, settings, instructions, tool definitions), precomputed so prompt caches hit and saved runs can be matched to the agent version that made them.
 _Avoid_: header, template
 
+## Runs
+
+**Saved run**:
+The stored record of one agent or workflow run: who owns it, its status, and enough state to resume it. Workflow runs are always saved; agent runs only once they suspend for approval.
+_Avoid_: snapshot (that is only the saved state), checkpoint
+
+**Child run**:
+A saved agent run started by a workflow step, named after the workflow run and step so a replay finds it again.
+_Avoid_: sub-run, nested run
+
+**Operations**:
+The JSON-in, JSON-out way to start, resume, cancel and inspect an App's runs, shared by the C ABI, `dev serve` and the dev CLI.
+_Avoid_: handlers, endpoints
+
 ## Testing
 
 **Cassette**:

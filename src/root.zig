@@ -60,6 +60,11 @@ pub const trace = struct {
     pub const Span = t.Span;
     pub const off: Config = .off;
 };
+/// `rt.runs()` (PLAN.md §6.9): saved runs of every agent and workflow.
+pub const RunInfo = @import("runs.zig").Info;
+pub const RunStatus = @import("runs.zig").Status;
+pub const RunKind = @import("runs.zig").Kind;
+pub const RunFilter = @import("runs.zig").Filter;
 pub const Decision = @import("agent/events.zig").Decision;
 /// One decision for `resumeRun`/`resumeStream`: `.{ .id = req.id, .decision = .approve }`.
 pub const ApprovalDecision = @import("agent/run.zig").ApprovalDecision;
@@ -91,6 +96,8 @@ pub const testing = struct {
     pub const Harness = h.Harness;
     pub const Step = h.Step;
     pub const expectSuspended = h.expectSuspended;
+    /// The saved-run id of a workflow step's `n`th agent call (D63).
+    pub const childRunId = @import("runs.zig").childId;
     const arb = @import("testing/arbitrary.zig");
     pub const arbitrary = arb.arbitrary;
     pub const Gen = arb.Gen;
@@ -178,6 +185,8 @@ test {
     _ = @import("dev/serve.zig");
     _ = @import("storage/memory_store.zig");
     _ = @import("storage/sqlite.zig");
+    _ = @import("storage/conformance_test.zig");
+    _ = @import("runs.zig");
     _ = @import("mcp/protocol.zig");
     _ = @import("mcp/validate.zig");
 }

@@ -106,8 +106,9 @@ test "suspend, restart, resume: the run continues where it stopped" {
         req_id = try std.fmt.bufPrint(&req_id_buf, "{s}", .{s.requests[0].id});
         try t.expectEqual(@as(u32, 0), db.refunds.load(.monotonic));
         // Nothing reaches history until the run finishes.
-        const runs = try h.rt.state().storage.?.listRuns(h.arena.allocator(), .{ .kind = .agent, .status = "suspended" });
+        const runs = try h.runs().list(.{ .kind = .agent, .status = .suspended });
         try t.expectEqual(@as(usize, 1), runs.len);
+        try t.expect(runs[0].resumable);
         try t.expectEqualStrings("refunder", runs[0].owner_id);
     }
     // A new process with the same database.
@@ -126,8 +127,8 @@ test "suspend, restart, resume: the run continues where it stopped" {
     // History holds the whole run once; the run is recorded as completed.
     const hist = try h.rt.state().storage.?.loadHistory(h.arena.allocator(), "t1", 20);
     try t.expectEqual(@as(usize, 6), hist.len);
-    const rec = (try h.rt.state().storage.?.loadRun(h.arena.allocator(), run_id)).?;
-    try t.expectEqualStrings("completed", rec.status);
+    const rec = (try h.runs().get(run_id)).?;
+    try t.expectEqual(z.RunStatus.completed, rec.status);
     // Resuming a finished run is an error, not a second execution.
     try t.expectError(error.NotSuspended, h.agent(Refunder).resumeRun(run_id, &.{.{ .id = req_id, .decision = .approve }}));
     try t.expectEqual(@as(u32, 1), db.refunds.load(.monotonic));
@@ -173,9 +174,8 @@ test "a run claimed by another resume is RunBusy; cancelRun" {
         .tool(IssueRefund, .{ .order_id = "ORD-2", .amount_cents = 100 }),
     });
     const a = (try h.agent(Refunder).generate("Refund", .{})).suspended;
-    const store = h.rt.state().storage.?;
     // Another process got there first.
-    try t.expect(try store.claimRun(a.run_id, "suspended", "running", 0));
+    try h.claimRun(a.run_id);
     try t.expectError(error.RunBusy, h.agent(Refunder).resumeRun(a.run_id, &.{.{ .id = a.requests[0].id, .decision = .approve }}));
     try t.expectEqual(@as(u32, 0), db.refunds.load(.monotonic));
 

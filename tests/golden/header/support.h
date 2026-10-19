@@ -119,6 +119,9 @@ zastra_status support_agent_cancel(zastra_app *app, int agent_id, const char *ru
 zastra_result *support_workflow_start(zastra_app *app, int workflow_id, const char *input_json, zastra_error *err);
 zastra_result *support_workflow_resume(zastra_app *app, const char *run_id, const char *step_id, const char *resume_json, zastra_error *err);
 
+/* Abandon a suspended run of any agent or workflow. */
+zastra_status support_run_cancel(zastra_app *app, const char *run_id, zastra_error *err);
+
 #ifdef __cplusplus
 }
 #endif

@@ -100,7 +100,7 @@ pub fn render(comptime App: type, comptime lib: []const u8) []const u8 {
             \\#endif /* ZASTRA_COMMON_TYPES */
             \\
             \\
-        ;
+            ;
 
         // IDs
         h = h ++ "/* Agents */\n";
@@ -151,6 +151,8 @@ pub fn render(comptime App: type, comptime lib: []const u8) []const u8 {
             "/* Results: {\"status\":\"completed\",\"output\":...} | {\"status\":\"suspended\",\"run_id\",\"at\",\"payload\"} | {\"status\":\"failed\",\"step\",\"error\",\"message\"} */\n" ++
             "zastra_result *" ++ lib ++ "_workflow_start(zastra_app *app, int workflow_id, const char *input_json, zastra_error *err);\n" ++
             "zastra_result *" ++ lib ++ "_workflow_resume(zastra_app *app, const char *run_id, const char *step_id, const char *resume_json, zastra_error *err);\n\n" ++
+            "/* Abandon a suspended run of any agent or workflow. */\n" ++
+            "zastra_status " ++ lib ++ "_run_cancel(zastra_app *app, const char *run_id, zastra_error *err);\n\n" ++
             "#ifdef __cplusplus\n}\n#endif\n#endif /* " ++ L ++ "_H */\n";
         return h;
     }

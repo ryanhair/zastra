@@ -117,7 +117,8 @@ The full example lives in `sketch/`:
 **Runtime**
 - `App.init(gpa, io, opts)` returns a runtime `rt`; `rt.deinit()`
 - `rt.agent(A)`: `.generate(alloc, input, opts)` and `.stream(alloc, input, opts)`
-- `rt.workflow(W)`: `.start(alloc, input, opts)` and `.resumeStep(Step, alloc, run_id, resume_value)`
+- `rt.workflow(W)`: `.start(alloc, input, opts)`, `.resumeStep(Step, alloc, run_id, resume_value)` and `.cancelRun(alloc, run_id)`
+- `rt.runs()`: `.list(alloc, filter)`, `.get(alloc, run_id)` and `.cancel(alloc, run_id)` over every saved run, as `z.RunInfo` (§6.9, D63)
 - `rt.model(comptime "provider/id")`: `.generate(alloc, messages, opts)` and `.stream(...)`. The model string is comptime so the catalog lookup and provider selection stay comptime (§5.6, D15).
 
 **Testing**
@@ -500,7 +501,7 @@ On resume:
 Future consumers (v2):
 - TypeScript, Swift and Dart type generation
 - an OpenAPI spec for `dev serve`
-- an MCP server exposing agents and workflows (§14)
+- an MCP server exposing agents and workflows (§21.3)
 
 ---
 
@@ -768,6 +769,14 @@ pub const Storage = struct { // comptime-selected backend, reached through a sma
 - Only the backend named in `z.App` is compiled into the runtime. Agent and workflow code is generic over the agent/workflow (not the App), so it reaches storage through a 7-entry vtable; the cost is one indirect call per storage operation.
 - The SQLite amalgamation is always compiled into a static library, but its objects are linked only when `sqlite3_*` symbols are referenced, i.e. only for Apps with `.storage = .sqlite`.
 - Concurrency: one connection per runtime, guarded by a `std.Io.Mutex`, in WAL mode.
+- Both backends keep the same contract, checked by `src/storage/conformance_test.zig`: `listRuns` is newest `updated_at` first, saving an existing run keeps its `kind`, `owner_id` and `created_at`, and `claimRun` is a compare-and-set on the status (`z.RunStatus`, stored as its tag name).
+
+**Saved runs (D63).** Nothing but `src/runs.zig` reads or writes run records. It provides:
+- `open(owner, accept)`: load a suspended run and check it in one fixed order (kind and owner, status, then `accept`, which parses the saved state and checks the fingerprint or migrates). It returns a handle whose `claim()` takes the run, so callers can check more (decision ids) before claiming.
+- `cancelRun`, `save`, and `childId` / `findChild` for a workflow step's agent runs.
+- `rt.runs()` (`list`, `get`, `cancel`, returning `z.RunInfo` with `resumable`).
+
+Follow-up, not done: a run left in `running` by a crash stays there (resuming it is `RunBusy`). Recovering it needs a lease or heartbeat, which belongs in this module.
 
 ---
 
@@ -1016,6 +1025,14 @@ Decisions made so far, with the recommended default for each open item. Revise t
 | D53 | Provider modules | One shared `stream.SseStream(Wire)` owns the request, error mapping, SSE and JSON parsing and an unbounded event queue. Each API is a wire module supplying `path`, `auth`, `State`, `onEvent` and comptime `capabilities`. `agent.zig` reads the capabilities instead of switching on `spec.api`, and keeps all the error wording (§7). There is no runtime provider vtable: the raw `rt.model` path is comptime too (D15). Rejected: a `resolveReasoning` per wire module, which would scatter §7 wording over four files. (§6.2, §19.0) |
 | D54 | Opening model streams | `runtime.State.openStream` is the only place that turns a spec into a provider request, for the agent loop and `rt.model` alike. Under the harness, requests carry a routing tag (`x-zastra-agent`: the agent id, or `model:<provider>/<id>` for `rt.model`) *plus* the spec's headers. `h.scriptModel` scripts `rt.model`. Spans stay with the callers. (§19.0b) |
 | D55 | Zig 0.17 | zastra moves to Zig 0.17.x, mainly for coverage-guided fuzzing (0.16.0's test runner doesn't compile in fuzz mode). Reflection goes through `reflect.fields(T)`, one entry per field, since `@typeInfo` now gives parallel arrays and `std.meta.fields` is gone. The compile-time check still compares with v1.0.0, built with Zig 0.16.0, so it measures what users see, compiler changes included. It compiles the build runner first, untimed: 0.17 spends about a minute on that in an empty cache for any project, which isn't zastra's compile time. (§20) |
+| D56 | Where evals run | Their own binary (`z.addEvals`, `zig build eval`), not test blocks: evals need keys, cost money and aren't deterministic, and `zig build test` stays offline. The runner is a library function (`z.eval.run`), so tests check an eval's wiring with a harness runtime. (§21.1) |
+| D57 | Eval datasets | Zig literals checked at comptime, or JSONL parsed with the validated parser when the runner starts, before any model request, with file, line and field in the diagnostic. Not parsed at comptime, which would cost every build of the eval binary. (§21.1) |
+| D58 | Scorers and eval safety | A scorer returns a 0–1 `Score` with a reason. Built-ins check paths at comptime; judges are generated agents with a typed verdict and a cached rubric prefix. Subjects that can reach `.writes`/`.spends_money`/`.destructive` tools need `.allow_effects` (as in D52); gated calls are denied unless `.approvals = .approve`. (§21.1, §21.2) |
+| D59 | MCP server exposure | Explicit: `pub const mcp_server = z.McpServer(App, .{ .agents, .workflows })`. Exposed agents need a `.description`. Agents take `{message, thread?, resource?}`; workflows take their `Input`. Typed outputs become `outputSchema` and `structuredContent`; annotations come from effects. (§21.3) |
+| D60 | MCP server protocol | Both eras, like the client (D38): 2026-07-28 and 2025-11-25 `initialize`. Static tool lists. Validation issues and run failures are `isError` tool results; cancellation and progress notifications are supported. (§21.3) |
+| D61 | Approvals over MCP | Gated calls and workflow suspensions become elicitations: `InputRequiredResult` with an HMAC-signed `requestState` (2026-07-28) or `elicitation/create` during the call (2025-11-25). Without client support, gated calls are denied; there's no auto-approve. Exposing a workflow whose `Resume` isn't a flat object is a compile error. (§21.4) |
+| D62 | MCP server HTTP | Streamable HTTP in the server binary (`--http`) and at `/mcp` on `dev serve`, sharing `dev serve`'s HTTP plumbing and security rules. Stateless for 2026-07-28; in-memory sessions and no GET stream for 2025-11-25. (§21.4) |
+| D63 | Saved runs | One module (`src/runs.zig`) loads, checks, claims, cancels and names saved runs for agents, workflows, `rt.runs()`, the C ABI, `dev serve` and the dev CLI. Status is an enum, `z.RunStatus`. Every resume checks in one order (kind and owner, status, then parse and fingerprint, then claim), so a busy run is `RunBusy` even if it's also incompatible. `WrongAgent`/`WrongWorkflow` became `WrongOwner`. Workflows gain `cancelRun`. A step's child agent runs are named `<run>/<step><iteration>~<attempt>#<n>`: a retry starts fresh agent runs, and the attempt a step suspended in is saved so a resume replays it. On replay a failed child run is started again. Storage stays a record store, and one conformance suite checks both backends. (§6.9) |
 | O1 | Should `generate` on an approval-gated agent default to returning `error.ApprovalRequired`, or require `on_approval` at comptime? | **v1:** return the error. **v1.1:** superseded by D31 (it suspends). |
 | O2 | Tool name default: snake_case of type name vs. explicit `name` required | **Implemented default:** derived, with `pub const name` override. |
 | O3 | Should `z.Json` exist in v1 (an untyped escape hatch in schemas)? | **Implemented:** yes (`z.Json{ .raw = ... }`). Tools using it skip OpenAI strict mode. |
@@ -1026,7 +1043,7 @@ Decisions made so far, with the recommended default for each open item. Revise t
 
 ## 14. Deferred (v1.1 / v2)
 
-**v1.1** (everything deferred to v1.1 elsewhere in this plan, in one place; §17 orders it into releases and plans v1.1a in detail)
+**v1.1** (everything deferred to v1.1 elsewhere in this plan, in one place; §17 orders it into releases and plans v1.1a in detail). All of it shipped in v1.1.0–v1.3.0 (§17–§19) except nested tool-result blocks and client-side `pattern` enforcement, which stay conditional.
 
 Agents and providers
 - persisted agent runs while awaiting approval (D9); then approval-gated agents inside workflow steps suspend the workflow instead of being a compile error (D18)
@@ -1061,9 +1078,9 @@ Candidates, not committed
 - `z.DynamicAgent` (runtime model string, instructions, tool subset, JSON-typed output; D2, D15), only if a use case appears
 - semantic recall and a vector store interface (sqlite-vec first)
 - RAG utilities
-- evals runner (`z.eval(Agent, cases, scorers)` as test blocks; datasets via `@embedFile`, type-checked)
+- evals runner (planned in §21.1–21.2 as `z.Eval`, run by its own binary rather than test blocks, D56)
 - Studio web UI on `dev serve`
-- **MCP server export** (expose an App's agents and workflows as MCP tools)
+- **MCP server export** (expose an App's agents and workflows as MCP tools; planned in §21.3–21.4)
 - multi-language bindings from the manifest (TypeScript, Swift, Dart)
 - an OpenAPI spec
 - subagents
@@ -2071,3 +2088,176 @@ Zig 0.17.0 was released 2026-10-01. Its test runner fixes the fuzz-mode compile 
 - **`zig build fuzz`.** On x86_64 Linux, the CI fuzz step then failed in the report: `corrupted coverage file ...: pcs_len was zero`. Debug builds there use Zig's self-hosted backend, which emits no coverage instrumentation; LLVM does (macOS and aarch64 use LLVM by default). Forcing LLVM for the test binaries fixed it, but made `zig build test` on Linux take 121 s instead of 38 s. So a separate `fuzz` step builds the unit and integration tests again with `.use_llvm = true`, and `zig build test` keeps the fast backend. The fuzz command is `zig build fuzz --fuzz`, not `zig build test --fuzz` as §19.3 wrote.
 - The first Linux fuzz run crashed `MCP over HTTP: a 2025-11-25 server ... DELETE` (fuzz builds run every test, instrumented). The fake MCP server read a zero-length body from a DELETE, and `readerExpectNone` hands body-less methods the shared `Reader.ending`, which lives in read-only memory; even a zero-length read writes its `seek`. The fakes (MCP and OTLP) now skip the read for body-less methods. `dev serve` only reads POST bodies, so it isn't affected.
 - Released as **v1.4.0** (2026-10-18). Before the tag, the toolchain moved to `mise.toml`; CI installs it with `jdx/mise-action` and caches Zig's global cache with `actions/cache` (3ad53b0, green).
+
+## 21. v2a plan (evals and MCP server; release v1.5.0)
+
+v2a takes the two items from §14's v2 list that build most on what exists: an evals runner (N17, N18) and MCP server export (N19, N20). Both are additive, so they ship as **v1.5.0**: "v2" in §14 is a roadmap label, not a semver major. Neither adds code to an App binary: evals run in their own binary, and the MCP server is its own binary (or a `dev serve` route).
+
+| Milestone | Scope | Size |
+|---|---|---|
+| N17 | `z.Eval`: datasets, the runner and code scorers | large |
+| N18 | LLM-judge scorers, result files and baselines | medium |
+| N19 | MCP server: agents and workflows as MCP tools, over stdio | large |
+| N20 | MCP server: approvals and suspensions as elicitations; Streamable HTTP | medium |
+| N21 | Release v1.5.0 | small |
+
+Not in v2a: a vector store, RAG, `z.DynamicAgent` (no use case yet, §14), evals in `dev serve` or a UI (the Studio), exposing individual tools or MCP resources and prompts from the server.
+
+### 21.1 N17: `z.Eval` (D56–D58)
+
+**Problem.** Prompt, model and tool changes are checked today by scripted tests, which pin the loop's mechanics but say nothing about whether the model still does the job. Users write ad hoc scripts against real models, with no shared format for cases, scores or cost.
+
+**API.**
+
+```zig
+// evals.zig, next to app.zig
+const z = @import("zastra");
+const app = @import("app.zig");
+
+/// One case. `input` is required; everything else is the user's.
+const TriageCase = struct {
+    input: []const u8,
+    expected: struct { category: app.Category, min_urgency: u8 = 1 },
+};
+
+pub const Triage = z.Eval(app.TriageAgent, .{
+    .name = "triage",
+    .cases = z.eval.jsonl(TriageCase, @embedFile("evals/triage.jsonl")),
+    .scorers = .{
+        z.score.equals("category"),         // output.category == case.expected.category
+        z.score.custom("urgency", urgency), // fn (TriageCase, *const z.eval.Run(app.TriageAgent)) z.score.Score
+    },
+    .trials = 3,  // each case runs 3 times; scores are averaged
+    .pass = 0.9,  // the eval fails below this mean score
+});
+
+pub const evals = .{ Triage, Replies };
+```
+
+`zig build eval -- [name...] [--filter text] [--concurrency 4] [--max-cost 2.00] [--out results.jsonl]`, from `z.addEvals(b, .{ .app, .evals, .zastra })` in `build.zig`.
+
+**Design:**
+- **Subjects.** An agent (`generate`) or a workflow (`start`). `z.eval.Run(S)` gives scorers the input, the typed output (or text), the tool calls made with their typed inputs and results, steps, usage, latency and run id. A workflow that suspends scores 0 with "suspended at <step>".
+- **A binary, not test blocks (D56).** Evals need keys, cost money and aren't deterministic, so `zig build test` must not run them. `z.addEvals` builds a runner with the App and the evals module, like `z.addDev`. The runner calls the library function `z.eval.run(E, &rt, arena, opts) !Report`, which tests use with a harness runtime and scripted models to check an eval's wiring for free.
+- **Cases (D57).** Zig literals (`.cases = &.{ .{ ... } }`, checked at comptime) or JSONL, `@embedFile`d and parsed with the validated parser (§5.2) **when the runner starts, before any model request**. A bad line fails the run with `evals/triage.jsonl:14: expected.category: "billng" is not one of billing, shipping, ...`. Not parsed at comptime: hundreds of cases would cost every build of the eval binary. `Case` must have an `input` of the subject's input type; missing it is a compile error (§7).
+- **Code scorers (D58).** A scorer returns `z.score.Score{ .value: f64 (0 to 1), .reason: []const u8 = "" }`.
+  - `z.score.equals("path")`: the output's field at `path` equals the case's `expected` at the same path. Both paths are checked at comptime with did-you-mean (the §5.9 path code).
+  - `z.score.calledTool(T, .{ .times = .at_least(1) })`, `z.score.noToolErrors()`, `z.score.maxSteps(n)`.
+  - `z.score.custom("name", f)`: any function of the case and the run.
+- **Safety (D58).** Evals run the App's real tools. As with `fuzzTool` (D52), a subject that can reach a tool with `.writes`, `.spends_money` or `.destructive` effects is a compile error unless the eval sets `.allow_effects = true`. Gated calls are denied with "denied by the eval runner" unless `.approvals = .approve`.
+- **Running.** Cases run concurrently through `Io.Group`, at most `--concurrency` at a time; 429s use the HTTP client's retries. `--max-cost` stops starting cases once the spent cost passes it, and the report marks the rest as skipped. The context comes from `createContext` (D28). Each case gets an `eval_case` span (`zastra.eval.name`, `zastra.eval.case`, `zastra.eval.trial`) with the run under it.
+- **Report.** Per eval: mean score per scorer and overall, cases passed, total cost and tokens, p50 and p95 latency, then each failing case with its scorer reasons. The exit code is nonzero when an eval is below `.pass`.
+
+**Tests**, through `z.eval.run` and a harness runtime:
+- an agent eval and a workflow eval with scripted turns: scores, trials, the report
+- a JSONL case with a type error: the diagnostic names the file, line and field, and no model request was made
+- `--max-cost` (scripted usage): the remaining cases are skipped
+- concurrency: two cases blocked in a tool at once
+- compile-fail tests: `Case` without `input`, a wrong `equals` path on either side, an effectful subject without `.allow_effects`
+
+**Exit criteria:** the above pass; the support example has a triage eval (about 10 cases) that runs live once with keys; App binaries don't change size.
+
+### 21.2 N18: LLM judges, result files and baselines
+
+**Judges.** `z.score.judge("anthropic/claude-haiku-4-5", .{ .name = "helpful", .rubric = "..." })`:
+- It's a generated agent: `z.Agent(void, .{ .name = "judge_<eval>_<name>", .model, .instructions = <rubric and the scoring rules>, .output = struct { score: u4 (0 to 10), reasoning: []const u8 } })`. So the model id is checked at comptime with did-you-mean, its key joins the App's required environment, and the rubric sits in a cached prefix (§5.5) for every case.
+- The judge sees the case's input, its `expected` (if any) as JSON, and the subject's output as JSON (or text). The score is divided by 10.
+- Judge cost is reported separately from the subject's.
+- Judges run under the harness too: `h.script(E.Judge("helpful"), ...)`.
+
+**Result files.** `--out results.jsonl`: one line per case and trial with the eval name, case index, scores and reasons, output JSON, usage, latency, run id and the subject's `prefix_hash`, so a later reader knows which prompt produced it.
+
+**Baselines.** `--baseline old.jsonl` compares with an earlier result file:
+- the mean per scorer, before and after
+- cases that passed before and fail now, listed first
+- `--tolerance 0.05`: the run fails if any scorer's mean drops by more than this
+- a changed `prefix_hash` is noted, not an error (changing the prompt is often the point)
+
+**Tests:** a scripted judge (scores, reasons, separate cost); a result-file golden; a baseline comparison with one regressed case; a compile-fail test for a misspelled judge model.
+
+**Exit criteria:** the above pass; the support example's eval adds a judge and runs live, then again with `--baseline` against the first run's file.
+
+### 21.3 N19: MCP server (D59, D60)
+
+**Problem.** An App's agents and workflows can be called from Zig, C and `dev serve`. MCP clients (Claude Code, Claude Desktop, IDEs, other agent frameworks) can't call them.
+
+**API.**
+
+```zig
+// app.zig
+pub const mcp_server = z.McpServer(App, .{
+    .name = "support",
+    .version = "1.5.0",
+    .agents = .{ Support, TriageAgent },
+    .workflows = .{HandleTicket},
+});
+```
+
+```zig
+// build.zig
+const server = z.addMcpServer(b, .{ .app = app_mod, .zastra = zastra_dep });
+b.installArtifact(server.exe); // support-mcp: stdio by default
+```
+
+`claude mcp add support -- ./zig-out/bin/support-mcp` then works as is. The server is also a library type, `z.McpServer(...).serveStdio(&rt, io)`, so tests run it against a harness runtime.
+
+**Design:**
+- **Explicit exposure (D59).** Only the agents and workflows listed are tools: exposing an agent lets any connected client spend the App's API keys. An exposed agent needs a `.description`, since that's what the client's model chooses tools by; a missing one is a compile error (§7). No `pub const mcp_server` means `z.addMcpServer` fails to compile with a message showing the declaration.
+- **Agents as tools.** Name: the agent id. Input schema: `{"message": string}`, plus `thread` when the agent has history memory and `resource` when it has working memory. An agent with `.output` declares it as `outputSchema` and returns it as `structuredContent` and as JSON text; others return text.
+- **Workflows as tools.** Name: the workflow id. Input and output schemas are `W.Input` and `W.Output`, wrapped in `{"input": ...}` / `{"output": ...}` when they aren't objects (MCP requires objects).
+- **Annotations** from effects (§5.12), unioned over an agent's tools: `readOnlyHint` when none writes, `destructiveHint` when one is `.destructive`, and `openWorldHint` always (a model is called). Workflows get `openWorldHint` only.
+- **Protocol (D60).** Both eras, like the client (D38): 2026-07-28 (`server/discover`, `_meta` on every request, `resultType`) and 2025-11-25 (`initialize`). The framing comes from `mcp/protocol.zig`. Tool lists are static: `listChanged: false`, no `ttlMs`.
+- **Calls.** Arguments go through the validated parser (§5.2). Validation issues and run failures are tool results with `isError: true` and the diagnostic, so the client's model can correct itself. Unknown tools are JSON-RPC errors. Each call runs on its own task; responses are written under a mutex. `notifications/cancelled` cancels the run. With a `progressToken`, each step sends `notifications/progress` ("step 2: lookup_order").
+- **Approvals in N19.** Gated calls are denied with "the MCP server can't ask for approval yet" (N20 adds elicitation). Workflows that can suspend return `isError: true` "suspended at <step>"; N20 changes that.
+- **Size.** The server is its own binary; App binaries don't change. Record the server binary's size.
+
+**Tests:**
+- **zastra's MCP client as the client.** An App with `z.mcp.stdio(&.{"<server>"})`, whose scripted model calls the exposed agent, against a server App on scripted models. This checks discovery, schemas, structured output and errors in both directions with code we already trust.
+- raw JSON-RPC sessions per era (golden): discover/initialize, `tools/list`, a call, invalid arguments, an unknown tool, a failing run, cancellation, progress
+- compile-fail tests: an exposed agent without `.description`, a missing `mcp_server` declaration
+
+**Exit criteria:** the above pass; live, with keys, the support example's server in Claude Code and in the MCP Inspector (one agent call, one workflow call).
+
+### 21.4 N20: elicitation and Streamable HTTP (D61, D62)
+
+**Approvals as elicitations (D61).** When an exposed agent reaches a gated call, the run suspends (D31) and the server asks the client:
+- **2026-07-28:** the call returns an `InputRequiredResult` with one `elicitation/create` per pending request and a `requestState`. The client calls again with the answers; the server resumes the run with those decisions. `requestState` is the run id with an HMAC from a per-process key (or `ZASTRA_MCP_STATE_KEY`, so it survives a restart with SQLite storage); a forged or stale one is an error asking the client to call again.
+- **2025-11-25:** the server sends `elicitation/create` requests during the call: on stdio directly, on HTTP in the call's SSE response.
+- **The question:** the message names the tool and shows its input as JSON; the schema is `{"approve": boolean, "reason": string}`. Declining or cancelling the elicitation denies the call.
+- **Clients without elicitation** (by their capabilities) get the N19 behavior: denied, with a reason the agent sees. There's no auto-approve option.
+
+**Workflow suspensions** use the same mechanism, with the suspend payload as the message and the step's `Resume` type as the schema. MCP elicitation schemas are flat objects of strings, numbers, booleans and enums, so exposing a workflow with a suspendable step whose `Resume` isn't flat is a compile error that names the step and field. Rejected: a generic `resume` tool taking a run id, which needs the client's model to carry run ids between calls.
+
+**Streamable HTTP (D62).** `support-mcp --http [--port 4112] [--host 127.0.0.1] [--token-env NAME]`, and `dev serve` mounts the same server at `/mcp`.
+- The HTTP plumbing and security rules of `dev serve` (§19.2: loopback by default, `Host` and `Origin` checks, a token off loopback, the body cap) move to a shared module that both use.
+- 2026-07-28: stateless; JSON or per-request SSE responses (SSE when the call reports progress or elicits).
+- 2025-11-25: `Mcp-Session-Id` sessions in memory, deleted on `DELETE`. No GET stream: the server has nothing to send outside a call.
+
+**Tests:** approval flows on both eras and both transports (approve, deny, decline, a client without elicitation, a forged `requestState`, a restart between the two calls with SQLite storage); a workflow suspension answered by elicitation; a compile-fail test for a non-flat `Resume`; the `dev serve` security tests repeated against `/mcp`; zastra's MCP client over HTTP against the server.
+
+**Exit criteria:** the above pass; live, the support example's refund approval answered in Claude Code (or the Inspector if Claude Code doesn't support elicitation at the time), over stdio and HTTP.
+
+### 21.5 N21: release v1.5.0
+
+- `zig build test`, size budgets, the compile-time check and the cross-compiles pass in CI.
+- The live runs recorded in N17–N20 are done; record any still open here before tagging.
+- Docs: `docs/evals.md`, `docs/mcp-server.md`; README and `docs/getting-started.md` mention both.
+- The sketch shows `z.Eval` and `z.McpServer` (CLAUDE.md: public API changes update `sketch/`).
+- CHANGELOG, tag `v1.5.0`.
+
+### 21.6 Order, dependencies and risks
+
+Order: N17, N18, N19, N20.
+- Evals first: self-contained, and the judge in N18 is a good test of generated agents before the MCP server generates more code from App types.
+- N19 before N20: elicitation needs a working server, and N19's tests (zastra's client against the server) carry over.
+- The HTTP move in N20 touches `dev serve`; its existing tests must pass unmodified.
+
+| Risk | Mitigation |
+|---|---|
+| Evals spend money unexpectedly | Cases validated before any request; `--max-cost`; the report shows cost per eval and per judge |
+| Evals run real side effects (refunds, emails) | Compile-time effects gate, as in `fuzzTool`; approvals denied by default |
+| Judges are noisy | Trials averaged; scores and reasons in the result file; baselines compare means with a tolerance |
+| Exposing an agent lets any connected client spend the App's keys | Explicit exposure; loopback HTTP and the `dev serve` security rules; a token off loopback |
+| A forged `requestState` resumes someone else's run | HMAC over the run id; stale or forged states are rejected |
+| Clients' elicitation support varies | Capabilities are checked; without elicitation, gated calls are denied, never approved |
+| The 2026-07-28 server side differs from our reading of the spec | The live checks use real clients; the client side (N5) already passed against real modern servers |

@@ -19,7 +19,7 @@ const run = @import("../agent/run.zig");
 const encode = @import("../capi/encode.zig");
 const manifest = @import("../capi/manifest.zig");
 const step = @import("../workflow/step.zig");
-const storage = @import("../storage/storage.zig");
+const runs = @import("../runs.zig");
 
 pub const Options = struct {
     host: []const u8 = "127.0.0.1",
@@ -436,81 +436,62 @@ pub fn Server(comptime App: type) type {
 
         // ── runs ──────────────────────────────────────────────────────────
 
-        fn store(s: *Self, c: *Ctx) !?storage.Storage {
-            return s.rt.state().storage orelse {
-                try c.fail(.not_found, "NoStorage", "this App runs without storage, so there are no saved runs", .{});
-                return null;
-            };
-        }
-
-        fn writeRun(w: *Io.Writer, r: storage.RunRecord, with_state: bool) !void {
+        fn writeRun(w: *Io.Writer, r: runs.Info) !void {
             try w.writeAll("{\"run_id\":");
             try json.writeString(r.run_id, w);
             try w.print(",\"kind\":\"{t}\",\"owner_id\":", .{r.kind});
             try json.writeString(r.owner_id, w);
-            try w.writeAll(",\"status\":");
-            try json.writeString(r.status, w);
+            try w.print(",\"status\":\"{t}\"", .{r.status});
             if (r.suspended_at) |at| {
                 try w.writeAll(",\"suspended_at\":");
                 try json.writeString(at, w);
             }
-            try w.print(",\"resumable\":{},\"created_at\":{d},\"updated_at\":{d}", .{ std.mem.eql(u8, r.status, "suspended") and current(r), r.created_at, r.updated_at });
-            if (with_state and r.state_json.len > 0) {
+            try w.print(",\"resumable\":{},\"created_at\":{d},\"updated_at\":{d}", .{ r.resumable, r.created_at, r.updated_at });
+            if (r.state_json) |state| if (state.len > 0) {
                 try w.writeAll(",\"state\":");
-                try w.writeAll(r.state_json);
-            }
+                try w.writeAll(state);
+            };
             try w.writeByte('}');
         }
 
-        /// Whether the run was saved by this version of its agent or workflow.
-        fn current(r: storage.RunRecord) bool {
-            switch (r.kind) {
-                .workflow => inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, r.owner_id)) return r.fingerprint == W.fingerprint_value,
-                .agent => inline for (App.agents) |A| if (std.mem.eql(u8, A.id, r.owner_id)) return r.fingerprint == A.run_fingerprint,
-            }
-            return false;
-        }
-
         fn listRuns(s: *Self, c: *Ctx, query: []const u8) !void {
-            const st = (try s.store(c)) orelse return;
-            var filter: storage.RunFilter = .{};
+            var filter: runs.Filter = .{};
             var it = std.mem.tokenizeScalar(u8, query, '&');
             while (it.next()) |kv| {
                 const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
                 const k = kv[0..eq];
                 const v = try percentDecode(c.arena, kv[eq + 1 ..]);
-                if (std.mem.eql(u8, k, "status")) filter.status = v;
+                if (std.mem.eql(u8, k, "status")) filter.status = std.meta.stringToEnum(runs.Status, v) orelse
+                    return c.fail(.bad_request, "InvalidInput", "status must be one of running, suspended, completed, failed, canceled", .{});
                 if (std.mem.eql(u8, k, "owner")) filter.owner_id = v;
-                if (std.mem.eql(u8, k, "kind")) filter.kind = std.meta.stringToEnum(storage.RunKind, v) orelse
+                if (std.mem.eql(u8, k, "kind")) filter.kind = std.meta.stringToEnum(runs.Kind, v) orelse
                     return c.fail(.bad_request, "InvalidInput", "kind must be 'agent' or 'workflow'", .{});
                 if (std.mem.eql(u8, k, "limit")) filter.limit = std.fmt.parseInt(u32, v, 10) catch
                     return c.fail(.bad_request, "InvalidInput", "limit must be a number", .{});
             }
-            const runs = st.listRuns(c.arena, filter) catch |err| return c.failErr(err, "");
+            const list = s.rt.runs().list(c.arena, filter) catch |err| return c.failErr(err, s.rt.lastDiagnostic());
             var aw: Io.Writer.Allocating = .init(c.arena);
             try aw.writer.writeByte('[');
-            for (runs, 0..) |r, i| {
+            for (list, 0..) |r, i| {
                 if (i > 0) try aw.writer.writeByte(',');
-                try writeRun(&aw.writer, r, false);
+                try writeRun(&aw.writer, r);
             }
             try aw.writer.writeByte(']');
             return c.send(.ok, aw.written());
         }
 
         fn getRun(s: *Self, c: *Ctx, id: []const u8) !void {
-            const st = (try s.store(c)) orelse return;
-            const r = (st.loadRun(c.arena, id) catch |err| return c.failErr(err, "")) orelse
+            const r = (s.rt.runs().get(c.arena, id) catch |err| return c.failErr(err, s.rt.lastDiagnostic())) orelse
                 return c.fail(.not_found, "RunNotFound", "no run '{s}'", .{id});
             var aw: Io.Writer.Allocating = .init(c.arena);
-            try writeRun(&aw.writer, r, true);
+            try writeRun(&aw.writer, r);
             return c.send(.ok, aw.written());
         }
 
         /// Agent runs: `{"decisions":[{"id":"...","approve":true}]}`. Workflow runs: `{"value":...}`, with an
         /// optional `"step"` that must match where the run is suspended.
         fn resumeRun(s: *Self, c: *Ctx, id: []const u8, streaming: bool) !void {
-            const st = (try s.store(c)) orelse return;
-            const rec = (st.loadRun(c.arena, id) catch |err| return c.failErr(err, "")) orelse
+            const rec = (s.rt.runs().get(c.arena, id) catch |err| return c.failErr(err, s.rt.lastDiagnostic())) orelse
                 return c.fail(.not_found, "RunNotFound", "no run '{s}'", .{id});
             const body = std.json.parseFromSliceLeaky(std.json.Value, c.arena, if (c.body.len == 0) "{}" else c.body, .{}) catch
                 return c.fail(.bad_request, "InvalidInput", "the body must be a JSON object", .{});
@@ -528,10 +509,10 @@ pub fn Server(comptime App: type) type {
                         return c.failErr(err, s.rt.lastDiagnostic());
                     return c.send(.ok, try encode.runResultJson(A, c.arena, r));
                 };
-                return c.fail(.conflict, "WrongAgent", "run '{s}' belongs to agent '{s}', which isn't in this App or has no approval-gated tools", .{ id, rec.owner_id });
+                return c.fail(.conflict, "WrongOwner", "run '{s}' belongs to agent '{s}', which isn't in this App or has no approval-gated tools", .{ id, rec.owner_id });
             }
             if (streaming) return c.fail(.bad_request, "InvalidInput", "resume/stream is for agent runs; resume workflow runs with POST /api/runs/{{id}}/resume", .{});
-            const at = rec.suspended_at orelse return c.fail(.conflict, "NotSuspended", "run '{s}' is {s}, not suspended", .{ id, rec.status });
+            const at = rec.suspended_at orelse return c.fail(.conflict, "NotSuspended", "run '{s}' is {t}, not suspended", .{ id, rec.status });
             if (body.object.get("step")) |sv| if (sv != .string or !std.mem.eql(u8, sv.string, at))
                 return c.fail(.conflict, "NotSuspendedAtStep", "run '{s}' is suspended at '{s}'", .{ id, at });
             inline for (App.workflows) |W| if (std.mem.eql(u8, W.id, rec.owner_id)) {
@@ -547,7 +528,7 @@ pub fn Server(comptime App: type) type {
                 };
                 return c.fail(.conflict, "SnapshotIncompatible", "run '{s}' is suspended at '{s}', which isn't a suspendable step of the current '{s}'", .{ id, at, W.id });
             };
-            return c.fail(.conflict, "WrongWorkflow", "run '{s}' belongs to workflow '{s}', which isn't in this App", .{ id, rec.owner_id });
+            return c.fail(.conflict, "WrongOwner", "run '{s}' belongs to workflow '{s}', which isn't in this App", .{ id, rec.owner_id });
         }
 
         /// `[{"id":"...","approve":true}, {"id":"...","deny":"reason"}]`, as
@@ -566,19 +547,7 @@ pub fn Server(comptime App: type) type {
         }
 
         fn cancelRun(s: *Self, c: *Ctx, id: []const u8) !void {
-            const st = (try s.store(c)) orelse return;
-            const rec = (st.loadRun(c.arena, id) catch |err| return c.failErr(err, "")) orelse
-                return c.fail(.not_found, "RunNotFound", "no run '{s}'", .{id});
-            if (!std.mem.eql(u8, rec.status, "suspended")) return c.fail(.conflict, "NotSuspended", "run '{s}' is {s}; only suspended runs can be canceled", .{ id, rec.status });
-            if (rec.kind == .agent) {
-                inline for (App.agents) |A| if (comptime A.has_approvals) if (std.mem.eql(u8, A.id, rec.owner_id)) {
-                    run.cancelRun(A, s.rt.state(), c.arena, id) catch |err| return c.failErr(err, s.rt.lastDiagnostic());
-                    return c.send(.ok, "{\"status\":\"canceled\"}");
-                };
-            }
-            const now: i64 = @intCast(@divFloor(Io.Clock.real.now(s.io).nanoseconds, std.time.ns_per_ms));
-            const ok = st.claimRun(id, "suspended", "canceled", now) catch |err| return c.failErr(err, "");
-            if (!ok) return c.fail(.conflict, "RunBusy", "run '{s}' changed while canceling", .{id});
+            s.rt.runs().cancel(c.arena, id) catch |err| return c.failErr(err, s.rt.lastDiagnostic());
             return c.send(.ok, "{\"status\":\"canceled\"}");
         }
 
@@ -661,8 +630,8 @@ pub fn statusOf(err: anyerror) std.http.Status {
         .{ "RunBusy", .conflict },
         .{ "NotSuspended", .conflict },
         .{ "NotSuspendedAtStep", .conflict },
-        .{ "WrongAgent", .conflict },
-        .{ "WrongWorkflow", .conflict },
+        .{ "WrongOwner", .conflict },
+        .{ "NoStorage", .not_found },
         .{ "SnapshotIncompatible", .conflict },
         .{ "UnknownApproval", .bad_request },
         .{ "ConnectionFailed", .bad_gateway },
